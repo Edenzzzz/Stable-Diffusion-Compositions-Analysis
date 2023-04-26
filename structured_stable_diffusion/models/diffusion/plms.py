@@ -151,7 +151,8 @@ class PLMSSampler(object):
             iterator = time_range
         old_eps = []
         self.attn_maps = defaultdict(list)
-        
+        self.v_matrix = defaultdict(list)
+
         for i, step in enumerate(iterator):
             index = total_steps - i - 1
             ts = torch.full((b,), step, device=device, dtype=torch.long)
@@ -185,7 +186,7 @@ class PLMSSampler(object):
                     module_name = type(module).__name__
                     if module_name == 'CrossAttention' and 'attn2' in name:
                         self.attn_maps[name].append(module.attn_maps)
-
+                        self.v_matrix[name].append(module.v_matrix)
         return img, intermediates
 
     @torch.no_grad()

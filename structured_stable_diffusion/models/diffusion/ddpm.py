@@ -16,7 +16,9 @@ from contextlib import contextmanager
 from functools import partial
 from tqdm import tqdm
 from torchvision.utils import make_grid
-from pytorch_lightning.utilities.distributed import rank_zero_only
+#from pytorch_lightning.utilities.distributed import rank_zero_only #before 1.8
+from pytorch_lightning.utilities.rank_zero import rank_zero_only
+
 
 from structured_stable_diffusion.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config
 from structured_stable_diffusion.modules.ema import LitEma

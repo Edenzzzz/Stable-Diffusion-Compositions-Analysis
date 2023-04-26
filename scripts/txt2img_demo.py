@@ -1,3 +1,5 @@
+#python scripts/txt2img_demo.py --prompt "A red teddy bear in a christmas hat sitting next to a glass" --plms --parser_type constituency
+#python scripts/txt2img_demo.py --from-file prompts.txt --plms --parser_type constituency --compare True --save_v_matrix True 
 import argparse, os, sys, glob
 from collections import defaultdict
 from ossaudiodev import SNDCTL_SEQ_CTRLRATE
@@ -24,9 +26,10 @@ import sng_parser
 import stanza
 from nltk.tree import Tree
 nlp = stanza.Pipeline(lang='en', processors='tokenize,pos,constituency')
-import pdb
-import json
-
+import cv2
+import matplotlib.pyplot as plt
+import logging 
+logging.basicConfig(level=logging.ERROR)
 
 def preprocess_prompts(prompts):
     if isinstance(prompts, (list, tuple)):
@@ -213,6 +216,27 @@ def load_replacement(x):
         return x
 
 
+def make_dir(outpath, folder_name):
+    sample_path = os.path.join(outpath, folder_name)
+    os.makedirs(sample_path, exist_ok=True)
+    base_count = len(os.listdir(sample_path))
+    grid_count = len(os.listdir(outpath)) - 1
+
+    return sample_path, base_count, grid_count
+
+def make_im_subplots(*args, size, dpi=100):
+    """
+    Make subplots for images
+    @args : number of rows and columns
+    """
+    fig, axes = plt.subplots(*args,figsize=(size * args[0] // dpi, size * args[1] // dpi), dpi=dpi)
+    #two titles for two columns
+    fig.text(0.25, 0.95, "Vanila", fontsize=14)
+    fig.text(0.75, 0.95, "Modified", fontsize=14)
+    fig.subplots_adjust(left=0, right=1, bottom=0, top=1, wspace=0, hspace=0)
+
+    return fig, axes
+
 def main():
     parser = argparse.ArgumentParser()
 
@@ -329,7 +353,7 @@ def main():
     parser.add_argument(
         "--ckpt",
         type=str,
-        default="models/ldm/stable-diffusion-v1/model.ckpt",
+        default="models/ldm/stable-diffusion-v1/sd-v1-4.ckpt",
         help="path to checkpoint of model",
     )
     parser.add_argument(
@@ -362,8 +386,24 @@ def main():
         help='If True, the attention maps will be saved as a .pth file with the name same as the image'
     )
 
+    parser.add_argument(
+        "--save_v_matrix",
+        default='False',
+        help="whether to save the value matrices"
+    )
+
+    parser.add_argument(
+        "--compare",
+        default="False",
+        help="use both vanilla and modified value matrix and visualize the difference using a grid"
+    )
+
     opt = parser.parse_args()
 
+    if opt.save_v_matrix:
+        print("Saving value matrices")
+    if opt.compare:
+        print("Comparing vanilla and modified value matrices using method in Structured diffusion paper")
     if opt.laion400m:
         print("Falling back to LAION 400M model...")
         opt.config = "configs/latent-diffusion/txt2img-1p4B-eval.yaml"
@@ -406,107 +446,146 @@ def main():
             except:
                 data = [batch_size * [d] for d in data]
 
-    sample_path = os.path.join(outpath, "samples")
-    os.makedirs(sample_path, exist_ok=True)
-    base_count = len(os.listdir(sample_path))
-    grid_count = len(os.listdir(outpath)) - 1
+    
 
     start_code = None
     if opt.fixed_code:
         start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
 
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
+
+    folder_names = ["samples"] if not opt.compare else ["samples", "vanilla_samples"]
+    
     with torch.no_grad():
         with precision_scope("cuda"):
             with model.ema_scope():
+                for idx, name in enumerate(folder_names):
+                    sample_path, base_count, grid_count = make_dir(outpath, name)
+                    all_samples = list()
+                    for n in trange(opt.n_iter, desc="Sampling"):
+                        for bid, prompts in enumerate(tqdm(data, desc="data")):
+                            prompts = preprocess_prompts(prompts)
+                            uc = None
+                            if opt.scale != 1.0:
+                                uc = model.get_learned_conditioning(batch_size * [""])
 
-                all_samples = list()
-                for n in trange(opt.n_iter, desc="Sampling"):
-                    for bid, prompts in enumerate(tqdm(data, desc="data")):
-                        prompts = preprocess_prompts(prompts)
+                            c = model.get_learned_conditioning(prompts)
 
-                        uc = None
-                        if opt.scale != 1.0:
-                            uc = model.get_learned_conditioning(batch_size * [""])
+                            if opt.parser_type == 'constituency':
+                                doc = nlp(prompts[0])
+                                mytree = Tree.fromstring(str(doc.sentences[0].constituency))
+                                tokens = model.cond_stage_model.tokenizer.tokenize(prompts[0])
+                                nps, spans, noun_chunk = get_all_nps(mytree, prompts[0], tokens)
+                            elif opt.parser_type == 'scene_graph':
+                                nps, spans, noun_chunk = get_all_spans_from_scene_graph(prompts[0].split("\t")[0])
+                            else:
+                                raise NotImplementedError
+                            
+                            nps = [[np]*len(prompts) for np in nps]
+                            if "vanilla" in name:
+                                print("Using vanilla value matrix")
+                                c = model.get_learned_conditioning(nps[0])
+                            elif opt.conjunction:
+                                c = [model.get_learned_conditioning(np) for np in nps]
+                                k_c = [c[0]] + align_sequence(c[0], c[1:], spans[1:])
+                                v_c = align_sequence(c[0], c[1:], spans[1:], single=True)
+                                c = {'k': k_c, 'v': v_c}
+                            else:
+                                c = [model.get_learned_conditioning(np) for np in nps]
+                                k_c = c[:1]
+                                v_c = [c[0]] + align_sequence(c[0], c[1:], spans[1:])
+                                c = {'k': k_c, 'v': v_c}
 
-                        c = model.get_learned_conditioning(prompts)
+                            shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
+                            samples_ddim, intermediates = sampler.sample(S=opt.ddim_steps,
+                                                            conditioning=c,
+                                                            batch_size=opt.n_samples,
+                                                            shape=shape,
+                                                            verbose=False,
+                                                            unconditional_guidance_scale=opt.scale,
+                                                            unconditional_conditioning=uc,
+                                                            eta=opt.ddim_eta,
+                                                            x_T=start_code,
+                                                            save_attn_maps=opt.save_attn_maps)
 
-                        if opt.parser_type == 'constituency':
-                            doc = nlp(prompts[0])
-                            mytree = Tree.fromstring(str(doc.sentences[0].constituency))
-                            tokens = model.cond_stage_model.tokenizer.tokenize(prompts[0])
-                            nps, spans, noun_chunk = get_all_nps(mytree, prompts[0], tokens)
-                        elif opt.parser_type == 'scene_graph':
-                            nps, spans, noun_chunk = get_all_spans_from_scene_graph(prompts[0].split("\t")[0])
+                            x_samples_ddim = model.decode_first_stage(samples_ddim)
+                            x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
+                            x_samples_ddim = x_samples_ddim.cpu().permute(0, 2, 3, 1).numpy()
+
+                            x_checked_image = x_samples_ddim
+
+                            x_checked_image_torch = torch.from_numpy(x_checked_image).permute(0, 3, 1, 2)
+
+                            if not opt.skip_save:
+                                for sid, x_sample in enumerate(x_checked_image_torch):
+                                    x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
+                                    img = Image.fromarray(x_sample.astype(np.uint8))          
+                                    try:
+                                        count = bid * opt.n_samples + sid
+                                        safe_filename = f"{n}-{count}-" + (filenames[count][:-4])[:150] + ".jpg"
+                                    except:
+                                        safe_filename = f"{base_count:05}-{n}-{prompts[0]}"[:100] + ".jpg"
+                                    img.save(os.path.join(sample_path, f"{safe_filename}"))
+                                    
+                                    if opt.save_attn_maps:
+                                        torch.save(sampler.attn_maps, os.path.join(sample_path, f'{safe_filename}.pt'))
+                                    if opt.save_v_matrix:
+                                        path = os.path.join(sample_path, "value_matrices")
+                                        os.makedirs(path, exist_ok=True)
+                                        torch.save(sampler.v_matrix, os.path.join(path, f'{safe_filename}.pt'))
+                                    base_count += 1  
+
+                            if not opt.skip_grid:
+                                all_samples.append(x_checked_image_torch)
+
+                    if not opt.skip_grid:
+                        if opt.compare:
+                            grid = torch.stack(all_samples, 0)
+                            grid = rearrange(grid, 'n b c h w -> (n b) c h w') * 255.
+                            if "compare_grid" not in locals():
+                                compare_grid = []
+                                compare_grid.append(grid)
+                            else:
+                                compare_grid.append(grid)
+                                compare_grid = torch.cat(compare_grid)
+                                # generate indices for same prompt with different value matrices on a row
+                                indices = torch.arange(compare_grid.shape[0]).reshape(2, compare_grid.shape[0] // 2).T
+
+                                #NOTE: Can't eliminate margins between subplots using plt
+                                # breakpoint()
+                                # fig, axes = make_im_subplots(indices.shape[0], indices.shape[1], size=opt.W)
+                                # for i in range(axes.shape[0]):
+                                #     for j in range(axes.shape[1]):
+                                #         axes[i][j].imshow(compare_grid[indices[i][j]].cpu().numpy().astype(np.uint8))
+                                #         axes[i][j].axis('off')
+                                #         axes[i][j].set_aspect('equal')
+                                # fig.savefig(os.path.join(outpath, f'compare_grid-{grid_count:04}.png'))
+                                # breakpoint()
+                                compare_grid = compare_grid[indices.flatten()]
+                                compare_grid = make_grid(compare_grid, nrow=2)
+                                compare_grid = rearrange(compare_grid, 'c h w -> h w c').cpu().numpy().astype(np.uint8)
+
+                                #add blank for title
+                                margin_grid = np.vstack([np.full((100, compare_grid.shape[1], 3), 255, dtype=np.uint8), compare_grid])
+                                cv2.putText(margin_grid, folder_names[0], (int(margin_grid.shape[1] * 0.1), 20), cv2.FONT_HERSHEY_SIMPLEX, 1, (2, 255, 3), 3, cv2.LINE_AA)
+                                cv2.putText(margin_grid, folder_names[1], (int(margin_grid.shape[1] * 0.6), 20), cv2.FONT_HERSHEY_SIMPLEX, 1, (2, 255, 3), 3, cv2.LINE_AA)
+                                img = Image.fromarray(margin_grid)
+                                img.save(os.path.join(outpath, f'compare_grid-{grid_count:04}.png'))
+                                grid_count += 1
                         else:
-                            raise NotImplementedError
-                        
-                        nps = [[np]*len(prompts) for np in nps]
-                        
-                        if opt.conjunction:
-                            c = [model.get_learned_conditioning(np) for np in nps]
-                            k_c = [c[0]] + align_sequence(c[0], c[1:], spans[1:])
-                            v_c = align_sequence(c[0], c[1:], spans[1:], single=True)
-                            c = {'k': k_c, 'v': v_c}
-                        else:
-                            c = [model.get_learned_conditioning(np) for np in nps]
-                            k_c = c[:1]
-                            v_c = [c[0]] + align_sequence(c[0], c[1:], spans[1:])
-                            c = {'k': k_c, 'v': v_c}
+                            #save single row grid 
+                            grid = torch.stack(all_samples, 0)
+                            grid = rearrange(grid, 'n b c h w -> (n b) c h w')
+                            grid = make_grid(grid, nrow=n_rows)
 
-                        shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
-                        samples_ddim, intermediates = sampler.sample(S=opt.ddim_steps,
-                                                         conditioning=c,
-                                                         batch_size=opt.n_samples,
-                                                         shape=shape,
-                                                         verbose=False,
-                                                         unconditional_guidance_scale=opt.scale,
-                                                         unconditional_conditioning=uc,
-                                                         eta=opt.ddim_eta,
-                                                         x_T=start_code,
-                                                         save_attn_maps=opt.save_attn_maps)
+                            # to image
+                            grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
+                            img = Image.fromarray(grid.astype(np.uint8))
+                            img.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
+                            grid_count += 1
 
-                        x_samples_ddim = model.decode_first_stage(samples_ddim)
-                        x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
-                        x_samples_ddim = x_samples_ddim.cpu().permute(0, 2, 3, 1).numpy()
-
-                        x_checked_image = x_samples_ddim
-
-                        x_checked_image_torch = torch.from_numpy(x_checked_image).permute(0, 3, 1, 2)
-
-                        if not opt.skip_save:
-                            for sid, x_sample in enumerate(x_checked_image_torch):
-                                x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
-                                img = Image.fromarray(x_sample.astype(np.uint8))          
-                                try:
-                                    count = bid * opt.n_samples + sid
-                                    safe_filename = f"{n}-{count}-" + (filenames[count][:-4])[:150] + ".jpg"
-                                except:
-                                    safe_filename = f"{base_count:05}-{n}-{prompts[0]}"[:100] + ".jpg"
-                                img.save(os.path.join(sample_path, f"{safe_filename}"))
-                                
-                                if opt.save_attn_maps:
-                                    torch.save(sampler.attn_maps, os.path.join(sample_path, f'{safe_filename}.pt'))
-                                
-                                base_count += 1  
-
-                        if not opt.skip_grid:
-                            all_samples.append(x_checked_image_torch)
-
-                if not opt.skip_grid:
-                    # additionally, save as grid
-                    grid = torch.stack(all_samples, 0)
-                    grid = rearrange(grid, 'n b c h w -> (n b) c h w')
-                    grid = make_grid(grid, nrow=n_rows)
-
-                    # to image
-                    grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
-                    img = Image.fromarray(grid.astype(np.uint8))
-                    img.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
-                    grid_count += 1
-
-    print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
-          f" \nEnjoy.")
+        print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
+            f" \nEnjoy.")
 
 
 if __name__ == "__main__":

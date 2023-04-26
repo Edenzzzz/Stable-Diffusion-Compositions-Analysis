@@ -226,7 +226,7 @@ class CrossAttention(nn.Module):
 
         if self.save_map and sim_uc.size(1) != sim_uc.size(2):
             self.save_attn_maps(attn_c)
-
+            self.save_v_matrix(v_c)
         # get uc output
         out_uc = einsum('b i j, b j d -> b i d', attn_uc, v_uc)
         
@@ -263,7 +263,6 @@ class CrossAttention(nn.Module):
 
         if self.save_map and sim.size(1) != sim.size(2):
             self.save_attn_maps(attn.chunk(2)[1])
-
         out = einsum('b i j, b j d -> b i d', attn, v)
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
         
@@ -281,7 +280,9 @@ class CrossAttention(nn.Module):
             height = width = int(math.sqrt(attn.size(1)))
             self.attn_maps = rearrange(attn.detach(), '(b x) (h w) l -> b x h w l', x=h, h=height, w=width)[...,:20].cpu()
 
-
+    def save_v_matrix(self, v_c):
+        self.v_matrix = {"vanilla":v_c[0].detach().cpu(), "modified": (sum(v_c) / len(v_c)).detach().cpu() / len(v_c) }
+        
 class BasicTransformerBlock(nn.Module):
     def __init__(self, dim, n_heads, d_head, dropout=0., context_dim=None, gated_ff=True, checkpoint=True, struct_attn=False, save_map=False):
         super().__init__()
