@@ -4,18 +4,18 @@ import torch
 import numpy as np
 from tqdm import tqdm
 from functools import partial
-
+#from . import attn_manager #@Wenxuan: circular import
 from structured_stable_diffusion.modules.diffusionmodules.util import make_ddim_sampling_parameters, make_ddim_timesteps, noise_like, \
     extract_into_tensor
 
 
-class DDIMSampler(object):
+class DDIMSampler():
     def __init__(self, model, schedule="linear", **kwargs):
-        super().__init__()
+        super().__init__(**kwargs)
         self.model = model
         self.ddpm_num_timesteps = model.num_timesteps
         self.schedule = schedule
-
+    
     def register_buffer(self, name, attr):
         if type(attr) == torch.Tensor:
             if attr.device != torch.device("cuda"):

@@ -167,13 +167,11 @@ class CrossAttention(nn.Module):
             nn.Linear(inner_dim, query_dim),
             nn.Dropout(dropout)
         )
-
         self.struct_attn = struct_attn
         self.save_map = save_map
 
     def forward(self, x, context=None, mask=None):
         q = self.to_q(x)
-
         if isinstance(context, list):
             if self.struct_attn:
                 out = self.struct_qkv(q, context, mask)
@@ -201,11 +199,24 @@ class CrossAttention(nn.Module):
 
     def multi_qkv(self, q, uc_context, context_k, context_v, mask):
         h = self.heads
-
+        
         assert uc_context.size(0) == context_k[0].size(0) == context_v[0].size(0)
         true_bs = uc_context.size(0) * h
 
         k_uc, v_uc = self.get_kv(uc_context)
+        
+        #@Wenxuan 
+        if getattr(self, "struct_key", False):
+            #swap is enough since the first element of context_v comes from the whole sentence
+            temp = context_k
+            context_k = context_v
+            context_v = temp
+            del temp
+        elif getattr(self, "struct_key_val", False):
+            context_k = context_v
+        else:
+            pass #struct_val or vanilla
+        
         k_c = [self.to_k(c_k) for c_k in context_k]
         v_c = [self.to_v(c_v) for c_v in context_v]
         
@@ -326,7 +337,6 @@ class SpatialTransformer(nn.Module):
                                  kernel_size=1,
                                  stride=1,
                                  padding=0)
-
         self.transformer_blocks = nn.ModuleList(
             [BasicTransformerBlock(inner_dim, n_heads, d_head, dropout=dropout, context_dim=context_dim, struct_attn=struct_attn, save_map=save_map)
                 for d in range(depth)]

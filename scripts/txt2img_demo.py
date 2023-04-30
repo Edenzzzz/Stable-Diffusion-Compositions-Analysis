@@ -1,5 +1,12 @@
-#python scripts/txt2img_demo.py --prompt "A red teddy bear in a christmas hat sitting next to a glass" --plms --parser_type constituency
-#python scripts/txt2img_demo.py --from-file prompts.txt --plms --parser_type constituency --compare True --save_v_matrix True 
+#NOTE: To run the script
+##################################################
+#To read a single prompt from the command line:
+#python scripts/txt2img_demo.py --prompt "A red teddy bear in a christmas hat sitting next to a glass" --scheduler dpm --denoise_steps 25 --parser_type constituency 
+##################################################
+#To read multiple prompts from a csv file:
+#python scripts/txt2img_demo.py --from_file prompts.csv --parser_type constituency --scheduler dpm --compare True --denoise_steps 25 --save_v_matrix True
+##################################################
+#(::)
 import argparse, os, sys, glob
 from collections import defaultdict
 from ossaudiodev import SNDCTL_SEQ_CTRLRATE
@@ -10,232 +17,23 @@ import numpy as np
 from omegaconf import OmegaConf
 from PIL import Image
 from tqdm import tqdm, trange
-from itertools import islice
 from einops import rearrange
 from torchvision.utils import make_grid
-import time
+from matplotlib import gridspec
 from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import contextmanager, nullcontext
 
-from structured_stable_diffusion.util import instantiate_from_config
 from structured_stable_diffusion.models.diffusion.ddim import DDIMSampler
 from structured_stable_diffusion.models.diffusion.plms import PLMSSampler
-
-import sng_parser
-import stanza
-from nltk.tree import Tree
-nlp = stanza.Pipeline(lang='en', processors='tokenize,pos,constituency')
+from structured_stable_diffusion.models.diffusion.dpm_solver import DPMSolverSampler
+from scripts.txt2img_utils import *
 import cv2
 import matplotlib.pyplot as plt
 import logging 
 logging.basicConfig(level=logging.ERROR)
 
-def preprocess_prompts(prompts):
-    if isinstance(prompts, (list, tuple)):
-        return [p.lower().strip().strip(".").strip() for p in prompts]
-    elif isinstance(prompts, str):
-        return prompts.lower().strip().strip(".").strip()
-    else:
-        raise NotImplementedError
 
-
-def get_all_nps(tree, full_sent, tokens=None, highest_only=False, lowest_only=False):
-    start = 0
-    end = len(tree.leaves())
-
-    idx_map = get_token_alignment_map(tree, tokens)
-
-    def get_sub_nps(tree, left, right):
-        if isinstance(tree, str) or len(tree.leaves()) == 1:
-            return []
-        sub_nps = []
-        n_leaves = len(tree.leaves())
-        n_subtree_leaves = [len(t.leaves()) for t in tree]
-        offset = np.cumsum([0] + n_subtree_leaves)[:len(n_subtree_leaves)]
-        assert right - left == n_leaves
-        if tree.label() == 'NP' and n_leaves > 1:
-            sub_nps.append([" ".join(tree.leaves()), (int(min(idx_map[left])), int(min(idx_map[right])))])
-            if highest_only and sub_nps[-1][0] != full_sent: return sub_nps
-        for i, subtree in enumerate(tree):
-            sub_nps += get_sub_nps(subtree, left=left+offset[i], right=left+offset[i]+n_subtree_leaves[i])
-        return sub_nps
-    
-    all_nps = get_sub_nps(tree, left=start, right=end)
-    lowest_nps = []
-    for i in range(len(all_nps)):
-        span = all_nps[i][1]
-        lowest = True
-        for j in range(len(all_nps)):
-            if i == j: continue
-            span2 = all_nps[j][1]
-            if span2[0] >= span[0] and span2[1] <= span[1]:
-                lowest = False
-                break
-        if lowest:
-            lowest_nps.append(all_nps[i])
-
-    if lowest_only:
-        all_nps = lowest_nps
-
-    if len(all_nps) == 0:
-        all_nps = []
-        spans = []
-    else:
-        all_nps, spans = map(list, zip(*all_nps))
-    if full_sent not in all_nps:
-        all_nps = [full_sent] + all_nps
-        spans = [(min(idx_map[start]), min(idx_map[end]))] + spans
-
-    return all_nps, spans, lowest_nps
-
-
-def get_token_alignment_map(tree, tokens):
-    if tokens is None:
-        return {i:[i] for i in range(len(tree.leaves())+1)}
-        
-    def get_token(token):
-        return token[:-4] if token.endswith("</w>") else token
-
-    idx_map = {}
-    j = 0
-    max_offset = np.abs(len(tokens) - len(tree.leaves()))
-    mytree_prev_leaf = ""
-    for i, w in enumerate(tree.leaves()):
-        token = get_token(tokens[j])
-        idx_map[i] = [j]
-        if token == mytree_prev_leaf+w:
-            mytree_prev_leaf = ""
-            j += 1
-        else:
-            if len(token) < len(w):
-                prev = ""
-                while prev + token != w:
-                    prev += token
-                    j += 1
-                    token = get_token(tokens[j])
-                    idx_map[i].append(j)
-                    # assert j - i <= max_offset
-            else:
-                mytree_prev_leaf += w
-                j -= 1
-            j += 1
-    idx_map[i+1] = [j]
-    return idx_map
-
-
-def get_all_spans_from_scene_graph(caption):
-    caption = caption.strip()
-    graph = sng_parser.parse(caption)
-    nps = []
-    spans = []
-    words = caption.split()
-    for e in graph['entities']:
-        start, end = e['span_bounds']
-        if e['span'] == caption: continue
-        if end-start == 1: continue
-        nps.append(e['span'])
-        spans.append(e['span_bounds'])
-    for r in graph['relations']:
-        start1, end1 = graph['entities'][r['subject']]['span_bounds']
-        start2, end2 = graph['entities'][r['object']]['span_bounds']
-        start = min(start1, start2)
-        end = max(end1, end2)
-        if " ".join(words[start:end]) == caption: continue
-        nps.append(" ".join(words[start:end]))
-        spans.append((start, end))
-    
-    return [caption] + nps, [(0, len(words))] + spans, None
-
-
-def single_align(main_seq, seqs, spans, dim=1):
-    main_seq = main_seq.transpose(0, dim)
-    for seq, span in zip(seqs, spans):
-        seq = seq.transpose(0, dim)
-        start, end = span[0]+1, span[1]+1
-        seg_length = end - start
-        main_seq[start:end] = seq[1:1+seg_length]
-
-    return main_seq.transpose(0, dim)
-
-
-def multi_align(main_seq, seq, span, dim=1):
-    seq = seq.transpose(0, dim)
-    main_seq = main_seq.transpose(0, dim)
-    start, end = span[0]+1, span[1]+1
-    seg_length = end - start
-
-    main_seq[start:end] = seq[1:1+seg_length]
-
-    return main_seq.transpose(0, dim)
-
-
-def align_sequence(main_seq, seqs, spans, dim=1, single=False):
-    aligned_seqs = []
-    if single:
-        return [single_align(main_seq, seqs, spans, dim=dim)]
-    else:
-        for seq, span in zip(seqs, spans):
-            aligned_seqs.append(multi_align(main_seq.clone(), seq, span, dim=dim))
-        return aligned_seqs
-
-
-def chunk(it, size):
-    it = iter(it)
-    return iter(lambda: tuple(islice(it, size)), ())
-
-
-def load_model_from_config(config, ckpt, verbose=False):
-    print(f"Loading model from {ckpt}")
-    pl_sd = torch.load(ckpt, map_location="cpu")
-    if "global_step" in pl_sd:
-        print(f"Global Step: {pl_sd['global_step']}")
-    sd = pl_sd["state_dict"]
-    model = instantiate_from_config(config.model)
-    m, u = model.load_state_dict(sd, strict=False)
-    if len(m) > 0 and verbose:
-        print("missing keys:")
-        print(m)
-    if len(u) > 0 and verbose:
-        print("unexpected keys:")
-        print(u)
-
-    model.cuda()
-    model.eval()
-    return model
-
-
-def load_replacement(x):
-    try:
-        hwc = x.shape
-        y = Image.open("assets/rick.jpeg").convert("RGB").resize((hwc[1], hwc[0]))
-        y = (np.array(y)/255.0).astype(x.dtype)
-        assert y.shape == x.shape
-        return y
-    except Exception:
-        return x
-
-
-def make_dir(outpath, folder_name):
-    sample_path = os.path.join(outpath, folder_name)
-    os.makedirs(sample_path, exist_ok=True)
-    base_count = len(os.listdir(sample_path))
-    grid_count = len(os.listdir(outpath)) - 1
-
-    return sample_path, base_count, grid_count
-
-def make_im_subplots(*args, size, dpi=100):
-    """
-    Make subplots for images
-    @args : number of rows and columns
-    """
-    fig, axes = plt.subplots(*args,figsize=(size * args[0] // dpi, size * args[1] // dpi), dpi=dpi)
-    #two titles for two columns
-    fig.text(0.25, 0.95, "Vanila", fontsize=14)
-    fig.text(0.75, 0.95, "Modified", fontsize=14)
-    fig.subplots_adjust(left=0, right=1, bottom=0, top=1, wspace=0, hspace=0)
-
-    return fig, axes
 
 def main():
     parser = argparse.ArgumentParser()
@@ -244,7 +42,7 @@ def main():
         "--prompt",
         type=str,
         nargs="?",
-        default="a painting of a virus monster playing guitar",
+        default="A room with blue walls and a white sink",
         help="the prompt to render"
     )
     parser.add_argument(
@@ -265,15 +63,16 @@ def main():
         help="do not save individual samples. For speed measurements.",
     )
     parser.add_argument(
-        "--ddim_steps",
+        "--denoise_steps",
         type=int,
         default=50,
         help="number of ddim sampling steps",
     )
     parser.add_argument(
-        "--plms",
-        action='store_true',
-        help="use plms sampling",
+        "--scheduler",
+        choices=["plms", "ddim", "dpm"],
+        default="dpm",
+        help="choose denoising scheduler. Should use dpm solver ++ for best speed ",
     )
     parser.add_argument(
         "--laion400m",
@@ -340,7 +139,7 @@ def main():
         help="unconditional guidance scale: eps = eps(x, empty) + scale * (eps(x, cond) - eps(x, empty))",
     )
     parser.add_argument(
-        "--from-file",
+        "--from_file",
         type=str,
         help="if specified, load prompts from this file",
     )
@@ -382,7 +181,7 @@ def main():
     )
     parser.add_argument(
         "--save_attn_maps",
-        action='store_true',
+        default='False',
         help='If True, the attention maps will be saved as a .pth file with the name same as the image'
     )
 
@@ -418,11 +217,6 @@ def main():
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model = model.to(device)
 
-    if opt.plms:
-        sampler = PLMSSampler(model)
-    else:
-        sampler = DDIMSampler(model)
-
     os.makedirs(opt.outdir, exist_ok=True)
     outpath = opt.outdir
 
@@ -437,7 +231,10 @@ def main():
     else:
         print(f"reading prompts from {opt.from_file}")
         with open(opt.from_file, "r") as f:
-            data = f.read().splitlines()
+            import pandas as pd
+            df = pd.read_csv(opt.from_file)
+            data = df["prompts"].tolist()
+            noun_indices = df["noun_idx"].tolist()
             try:
                 opt.end_idx = len(data) if opt.end_idx == -1 else opt.end_idx
                 data = data[:opt.end_idx]
@@ -445,6 +242,7 @@ def main():
                 data = list(chunk(data, batch_size))
             except:
                 data = [batch_size * [d] for d in data]
+            noun_indices = [get_word_inds(data[idx][0], item, model.cond_stage_model.tokenizer) for idx, item in enumerate(noun_indices)]
 
     
 
@@ -453,17 +251,37 @@ def main():
         start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
 
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
-
-    folder_names = ["samples"] if not opt.compare else ["samples", "vanilla_samples"]
+    #apply method in the paper to value matrix, key matrix and try adding gaussian noise
+    #NOTE: DO NOT change the format of these names 
+    options = ["vanilla"] if not opt.compare \
+        else [ 
+                "struct_value", "struct_key", 
+                "struct_value_key",
+                "vanilla",
+                "gauss_perturb_value_0.1", "gauss_perturb_key_0.1", #perturb with gaussian noise with std = original_std * strength 
+                "gauss_perturb_value_0.2", "gauss_perturb_key_0.2",
+                "gauss_perturb_value_0.05", "gauss_perturb_key_0.05",
+            ]
     
     with torch.no_grad():
         with precision_scope("cuda"):
             with model.ema_scope():
-                for idx, name in enumerate(folder_names):
-                    sample_path, base_count, grid_count = make_dir(outpath, name)
+                for idx, option in enumerate(options):
+                    
+                    #@Wenxuan
+                    save_attn_maps = opt.save_attn_maps if "struct" in option else False
+                    if opt.scheduler == "plms":
+                        sampler = PLMSSampler(model, option=option, save_attn_maps=save_attn_maps, noun_idx=noun_indices)
+                    elif opt.scheduler == "ddim":
+                        sampler = DDIMSampler(model, option=option, save_attn_maps=save_attn_maps, noun_idx=noun_indices)
+                    else:
+                        sampler = DPMSolverSampler(model, option=option, save_attn_maps=save_attn_maps, noun_idx=noun_indices)
+
+
+                    sample_path, base_count, grid_count = make_dir(outpath, option)
                     all_samples = list()
                     for n in trange(opt.n_iter, desc="Sampling"):
-                        for bid, prompts in enumerate(tqdm(data, desc="data")):
+                        for prompt_idx, prompts in enumerate(tqdm(data, desc="data")):
                             prompts = preprocess_prompts(prompts)
                             uc = None
                             if opt.scale != 1.0:
@@ -482,22 +300,27 @@ def main():
                                 raise NotImplementedError
                             
                             nps = [[np]*len(prompts) for np in nps]
-                            if "vanilla" in name:
+
+                            if "struct" not in option:
                                 print("Using vanilla value matrix")
                                 c = model.get_learned_conditioning(nps[0])
+
                             elif opt.conjunction:
+                                print("Using structure diffusion with conjunction")
                                 c = [model.get_learned_conditioning(np) for np in nps]
                                 k_c = [c[0]] + align_sequence(c[0], c[1:], spans[1:])
                                 v_c = align_sequence(c[0], c[1:], spans[1:], single=True)
                                 c = {'k': k_c, 'v': v_c}
+                                
                             else:
                                 c = [model.get_learned_conditioning(np) for np in nps]
                                 k_c = c[:1]
                                 v_c = [c[0]] + align_sequence(c[0], c[1:], spans[1:])
                                 c = {'k': k_c, 'v': v_c}
-
                             shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
-                            samples_ddim, intermediates = sampler.sample(S=opt.ddim_steps,
+                            #only save when using structure diffusion
+                            
+                            samples_ddim, intermediates = sampler.sample(S=opt.denoise_steps,
                                                             conditioning=c,
                                                             batch_size=opt.n_samples,
                                                             shape=shape,
@@ -506,7 +329,10 @@ def main():
                                                             unconditional_conditioning=uc,
                                                             eta=opt.ddim_eta,
                                                             x_T=start_code,
-                                                            save_attn_maps=opt.save_attn_maps)
+                                                            save_attn_maps=save_attn_maps,
+                                                            option=option,
+                                                            noun_idx=noun_indices[prompt_idx],
+                                                            )
 
                             x_samples_ddim = model.decode_first_stage(samples_ddim)
                             x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
@@ -521,18 +347,22 @@ def main():
                                     x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
                                     img = Image.fromarray(x_sample.astype(np.uint8))          
                                     try:
-                                        count = bid * opt.n_samples + sid
+                                        count = prompt_idx * opt.n_samples + sid
                                         safe_filename = f"{n}-{count}-" + (filenames[count][:-4])[:150] + ".jpg"
                                     except:
                                         safe_filename = f"{base_count:05}-{n}-{prompts[0]}"[:100] + ".jpg"
                                     img.save(os.path.join(sample_path, f"{safe_filename}"))
                                     
-                                    if opt.save_attn_maps:
-                                        torch.save(sampler.attn_maps, os.path.join(sample_path, f'{safe_filename}.pt'))
+                                    
+                                    store_object = sampler if opt.scheduler != "dpm" else sampler.dpm_solver
+                                    if save_attn_maps:
+                                        path = os.path.join(sample_path, "attn_maps")
+                                        os.makedirs(path, exist_ok=True)
+                                        torch.save(store_object.attn_maps, os.path.join(path, f'{safe_filename}.pt'))
                                     if opt.save_v_matrix:
                                         path = os.path.join(sample_path, "value_matrices")
                                         os.makedirs(path, exist_ok=True)
-                                        torch.save(sampler.v_matrix, os.path.join(path, f'{safe_filename}.pt'))
+                                        torch.save(store_object.v_matrix, os.path.join(path, f'{safe_filename}.pt'))
                                     base_count += 1  
 
                             if not opt.skip_grid:
@@ -541,36 +371,46 @@ def main():
                     if not opt.skip_grid:
                         if opt.compare:
                             grid = torch.stack(all_samples, 0)
-                            grid = rearrange(grid, 'n b c h w -> (n b) c h w') * 255.
+                            grid = rearrange(grid, 'n b c h w -> (n b) h w c') * 255.
                             if "compare_grid" not in locals():
                                 compare_grid = []
                                 compare_grid.append(grid)
                             else:
                                 compare_grid.append(grid)
                                 compare_grid = torch.cat(compare_grid)
-                                # generate indices for same prompt with different value matrices on a row
-                                indices = torch.arange(compare_grid.shape[0]).reshape(2, compare_grid.shape[0] // 2).T
+                                #plot params
+                                ncols = len(options)
+                                nrows = compare_grid.shape[0] // ncols  
+                                assert compare_grid.shape[0] % ncols == 0, "Error: Number of samples not the same for each option"
+                                # generate indices showing images in parralel
+                                indices = torch.arange(compare_grid.shape[0]).reshape(ncols, compare_grid.shape[0] // ncols).T
+                                dpi = 100
 
-                                #NOTE: Can't eliminate margins between subplots using plt
-                                # breakpoint()
-                                # fig, axes = make_im_subplots(indices.shape[0], indices.shape[1], size=opt.W)
+                                #best way to eliminate margins
+                                plt.figure(figsize=(ncols * opt.W // dpi, nrows * opt.H // dpi))
+                                gs = gridspec.GridSpec(nrows, ncols,
+                                                    wspace=0.0, hspace=0.0,
+                                                    # top=1.-0.5 / (nrows+1), bottom=0.5 / (nrows+1), 
+                                                    # left=0.5 / (ncols+1), right=1-0.5 / (ncols+1)
+                                                    ) 
+                                for i in range(nrows):
+                                    for j in range(ncols):
+                                        ax = plt.subplot(gs[i,j])
+                                        if i == 0:
+                                            #a title for each column
+                                            ax.set_title(option)
+                                        ax.imshow(compare_grid[indices[i][j]].cpu().numpy().astype(np.uint8))
+                                        ax.axis('off')
+                                plt.savefig(os.path.join(outpath, f'compare_grid-{grid_count:04}.png'))
+                                          
+                                #NOTE: Can't eliminate margins between subplots this way 
+                                # fig, axes = make_im_subplots(indices.shape[0], indices.shape[1], img_size=opt.W)
                                 # for i in range(axes.shape[0]):
                                 #     for j in range(axes.shape[1]):
                                 #         axes[i][j].imshow(compare_grid[indices[i][j]].cpu().numpy().astype(np.uint8))
                                 #         axes[i][j].axis('off')
-                                #         axes[i][j].set_aspect('equal')
                                 # fig.savefig(os.path.join(outpath, f'compare_grid-{grid_count:04}.png'))
-                                # breakpoint()
-                                compare_grid = compare_grid[indices.flatten()]
-                                compare_grid = make_grid(compare_grid, nrow=2)
-                                compare_grid = rearrange(compare_grid, 'c h w -> h w c').cpu().numpy().astype(np.uint8)
-
-                                #add blank for title
-                                margin_grid = np.vstack([np.full((100, compare_grid.shape[1], 3), 255, dtype=np.uint8), compare_grid])
-                                cv2.putText(margin_grid, folder_names[0], (int(margin_grid.shape[1] * 0.1), 20), cv2.FONT_HERSHEY_SIMPLEX, 1, (2, 255, 3), 3, cv2.LINE_AA)
-                                cv2.putText(margin_grid, folder_names[1], (int(margin_grid.shape[1] * 0.6), 20), cv2.FONT_HERSHEY_SIMPLEX, 1, (2, 255, 3), 3, cv2.LINE_AA)
-                                img = Image.fromarray(margin_grid)
-                                img.save(os.path.join(outpath, f'compare_grid-{grid_count:04}.png'))
+                                                                
                                 grid_count += 1
                         else:
                             #save single row grid 

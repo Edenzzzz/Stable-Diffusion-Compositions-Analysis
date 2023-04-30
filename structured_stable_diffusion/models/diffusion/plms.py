@@ -4,15 +4,14 @@ from collections import defaultdict
 import torch
 import numpy as np
 from tqdm import tqdm
-from functools import partial
-
+from structured_stable_diffusion.models.diffusion.attn_manager import model_manager
 from structured_stable_diffusion.modules.diffusionmodules.util import make_ddim_sampling_parameters, make_ddim_timesteps, noise_like
 
 
-class PLMSSampler(object):
+class PLMSSampler(model_manager):
     def __init__(self, model, schedule="linear", **kwargs):
-        super().__init__()
-        self.model = model
+        self.model = model #super.init will call self.model
+        super().__init__(**kwargs)
         self.ddpm_num_timesteps = model.num_timesteps
         self.schedule = schedule
 
@@ -96,7 +95,6 @@ class PLMSSampler(object):
         C, H, W = shape
         size = (batch_size, C, H, W)
         # print(f'Data shape for PLMS sampling is {size}')
-
         samples, intermediates = self.plms_sampling(conditioning, size,
                                                     callback=callback,
                                                     img_callback=img_callback,
@@ -150,14 +148,15 @@ class PLMSSampler(object):
         else:
             iterator = time_range
         old_eps = []
-        self.attn_maps = defaultdict(list)
-        self.v_matrix = defaultdict(list)
 
         for i, step in enumerate(iterator):
             index = total_steps - i - 1
             ts = torch.full((b,), step, device=device, dtype=torch.long)
             ts_next = torch.full((b,), time_range[min(i + 1, len(time_range) - 1)], device=device, dtype=torch.long)
-
+            #@wenxuan
+            if step == len(iterator) - 1 and "perturb" in self.option:
+                self.set_perturb_strength(self.option["perturb"], kwargs["noun_idx"])
+                
             if mask is not None:
                 assert x0 is not None
                 img_orig = self.model.q_sample(x0, ts)  # TODO: deterministic forward pass?
@@ -180,13 +179,12 @@ class PLMSSampler(object):
             if index % log_every_t == 0 or index == total_steps - 1:
                 intermediates['x_inter'].append(img)
                 intermediates['pred_x0'].append(pred_x0)
+            
+            #@Wenxuan
+            self.on_step_end(cur_step=i + 1, max_steps=len(iterator))
+            #save attention maps
 
-            if kwargs.get('save_attn_maps', False) and i % 5 == 0:
-                for name, module in self.model.model.diffusion_model.named_modules():
-                    module_name = type(module).__name__
-                    if module_name == 'CrossAttention' and 'attn2' in name:
-                        self.attn_maps[name].append(module.attn_maps)
-                        self.v_matrix[name].append(module.v_matrix)
+
         return img, intermediates
 
     @torch.no_grad()
@@ -258,3 +256,5 @@ class PLMSSampler(object):
         x_prev, pred_x0 = get_x_prev_and_pred_x0(e_t_prime, index)
 
         return x_prev, pred_x0, e_t
+    
+    
