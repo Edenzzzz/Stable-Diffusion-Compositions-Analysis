@@ -212,6 +212,7 @@ class CrossAttention(nn.Module):
             context_k = context_v
             context_v = temp
             del temp
+            
         elif getattr(self, "struct_key_val", False):
             context_k = context_v
         else:

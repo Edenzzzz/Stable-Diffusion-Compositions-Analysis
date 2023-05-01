@@ -155,7 +155,8 @@ class PLMSSampler(model_manager):
             ts_next = torch.full((b,), time_range[min(i + 1, len(time_range) - 1)], device=device, dtype=torch.long)
             #@wenxuan
             if step == len(iterator) - 1 and "perturb" in self.option:
-                self.set_perturb_strength(self.option["perturb"], kwargs["noun_idx"])
+                strength = float(kwargs["option"].split("_")[-1])
+                self.set_perturb_strength(strength, kwargs["noun_idx"])
                 
             if mask is not None:
                 assert x0 is not None

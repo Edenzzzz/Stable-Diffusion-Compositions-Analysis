@@ -1217,8 +1217,10 @@ class DPM_Solver(model_manager):
                 # Compute the remaining values by `order`-th order multistep DPM-Solver.
                 for step in range(order, steps + 1):
                     #@Wenxuan
+                    #perturb last step only
                     if step == steps and "perturb" in kwargs.get("option", None):
-                        self.set_perturb_strength(kwargs["option"], kwargs["noun_idx"])
+                        strength = float(kwargs["option"].split("_")[-1])
+                        self.set_perturb_strength(strength, kwargs["noun_idx"])
                         
                     t = timesteps[step]
                     # We only use lower order for steps < 10

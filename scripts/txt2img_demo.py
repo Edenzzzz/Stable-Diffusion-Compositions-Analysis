@@ -93,7 +93,7 @@ def main():
     parser.add_argument(
         "--n_iter",
         type=int,
-        default=2,
+        default=1,
         help="sample this often",
     )
     parser.add_argument(
@@ -182,6 +182,7 @@ def main():
     parser.add_argument(
         "--save_attn_maps",
         default='False',
+        type=eval,
         help='If True, the attention maps will be saved as a .pth file with the name same as the image'
     )
 
@@ -193,7 +194,7 @@ def main():
 
     parser.add_argument(
         "--compare",
-        default="False",
+        default="True",
         help="use both vanilla and modified value matrix and visualize the difference using a grid"
     )
 
@@ -374,9 +375,9 @@ def main():
                             grid = rearrange(grid, 'n b c h w -> (n b) h w c') * 255.
                             if "compare_grid" not in locals():
                                 compare_grid = []
-                                compare_grid.append(grid)
-                            else:
-                                compare_grid.append(grid)
+                            compare_grid.append(grid)
+
+                            if len(compare_grid) == len(options) and opt.compare:
                                 compare_grid = torch.cat(compare_grid)
                                 #plot params
                                 ncols = len(options)
@@ -397,8 +398,7 @@ def main():
                                     for j in range(ncols):
                                         ax = plt.subplot(gs[i,j])
                                         if i == 0:
-                                            #a title for each column
-                                            ax.set_title(option)
+                                            ax.set_title(options[j], fontsize=14)
                                         ax.imshow(compare_grid[indices[i][j]].cpu().numpy().astype(np.uint8))
                                         ax.axis('off')
                                 plt.savefig(os.path.join(outpath, f'compare_grid-{grid_count:04}.png'))

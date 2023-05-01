@@ -1,6 +1,6 @@
 from structured_stable_diffusion.models.diffusion.ddpm import LatentDiffusion
 from collections import defaultdict
-import torch
+import torch, numpy as np
 #@Wenxuan
 class model_manager():
     
@@ -108,31 +108,41 @@ class model_manager():
         component = self.component_to_perturb
         assert self.noun_idx is not None, "must provide noun_idx to perturb selected columns or rows"
         assert component in ["key", "value"], "can only perturb key or value matrices"
-        
+
         #functional programming :)
         def perturbed_forward(self, strength, noun_idx):
             if component == "key":
-                out_layer = self.to_k
+                weight = self.to_k.weight
             elif component == "value":
-                out_layer = self.to_v
-            
+                weight = self.to_v.weight
+
+
+            ##################replace forward function################
             def forward(x):
-                x = out_layer(x)
-                #x: [batch_size, num_heads, seq_len, dim]
+                """
+                @param x: (batch_size, seq_len, hid_dim)
+                """
+                x = torch.matmul(x, weight.transpose(-1, -2)) 
+                nonlocal noun_idx
+                noun_idx = torch.from_numpy(noun_idx).to(x.device) if isinstance(noun_idx, np.ndarray) else noun_idx
+                
                 #perturb selected rows or columns
                 if component == "key":
-                    x[:, :, noun_idx, :] += torch.randn_like(x[..., :, noun_idx]) * strength
+                    original_std = torch.std(x[:, :, noun_idx])
+                    x[:, :, noun_idx] += torch.randn_like(x[:, :, noun_idx]) * (strength * original_std)
+
                 elif component == "value":
-                    x[:, :, :, noun_idx] += torch.randn_like(x[..., noun_idx, :]) * strength
+                    original_std = torch.std(x[:, noun_idx, :])
+                    x[:, :, noun_idx] += torch.randn_like(x[:, :, noun_idx]) * strength * original_std
                 return x
             
             return forward
         
         for name, module in self.find_cross_attn_layers():
             if component == "key":
-                module.to_k = perturbed_forward(module, strength, component, noun_idx)
+                module.to_k.forward = perturbed_forward(module, strength, noun_idx)
             elif component == "value":
-                module.to_v = perturbed_forward(module, strength, component, noun_idx)
+                module.to_v.forward = perturbed_forward(module, strength, noun_idx)
 
     def on_step_end(self, cur_step, max_steps, **kwargs):
         if self.save_map:
