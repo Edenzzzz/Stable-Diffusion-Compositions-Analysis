@@ -209,6 +209,8 @@ def main():
         opt.config = "configs/latent-diffusion/txt2img-1p4B-eval.yaml"
         opt.ckpt = "models/ldm/text2img-large/model.ckpt"
         opt.outdir = "outputs/txt2img-samples-laion400m"
+    if opt.from_file:
+        opt.outdir = os.path.join(opt.outdir, os.path.basename(opt.from_file).split(".")[0])
 
     seed_everything(opt.seed)
 
@@ -259,9 +261,9 @@ def main():
                 "struct_value", "struct_key", 
                 "struct_value_key",
                 "vanilla",
-                "gauss_perturb_value_0.1", "gauss_perturb_key_0.1", #perturb with gaussian noise with std = original_std * strength 
-                "gauss_perturb_value_0.2", "gauss_perturb_key_0.2",
-                "gauss_perturb_value_0.05", "gauss_perturb_key_0.05",
+                ## perturb with gaussian noise with std = original_std * strength 
+                "gauss_perturb_value_0.1", "gauss_perturb_value_0.2", "gauss_perturb_value_0.4", "gauss_perturb_value_0.7",
+                "gauss_perturb_key_0.1", "gauss_perturb_key_0.2", "gauss_perturb_key_0.4", "gauss_perturb_key_0.7",
             ]
     
     with torch.no_grad():
@@ -303,11 +305,11 @@ def main():
                             nps = [[np]*len(prompts) for np in nps]
 
                             if "struct" not in option:
-                                print("Using vanilla value matrix")
+                                print(f"\nUsing vanilla value matrix with option {option}")
                                 c = model.get_learned_conditioning(nps[0])
 
                             elif opt.conjunction:
-                                print("Using structure diffusion with conjunction")
+                                print(f"\nUsing structure diffusion with conjunction with option {option}")
                                 c = [model.get_learned_conditioning(np) for np in nps]
                                 k_c = [c[0]] + align_sequence(c[0], c[1:], spans[1:])
                                 v_c = align_sequence(c[0], c[1:], spans[1:], single=True)
@@ -398,7 +400,7 @@ def main():
                                     for j in range(ncols):
                                         ax = plt.subplot(gs[i,j])
                                         if i == 0:
-                                            ax.set_title(options[j], fontsize=14)
+                                            ax.set_title(options[j], fontsize=19)
                                         ax.imshow(compare_grid[indices[i][j]].cpu().numpy().astype(np.uint8))
                                         ax.axis('off')
                                 plt.savefig(os.path.join(outpath, f'compare_grid-{grid_count:04}.png'))

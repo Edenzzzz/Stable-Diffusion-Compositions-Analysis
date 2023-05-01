@@ -3,9 +3,9 @@
 import torch
 
 from .dpm_solver import NoiseScheduleVP, model_wrapper, DPM_Solver
-from structured_stable_diffusion.models.diffusion.attn_manager import model_manager
+from structured_stable_diffusion.models.diffusion.attention_manager import manager
 
-class DPMSolverSampler(model_manager):
+class DPMSolverSampler(manager):
     def __init__(self, model, **kwargs):
         self.model = model
         super().__init__(**kwargs)

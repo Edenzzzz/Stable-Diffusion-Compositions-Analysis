@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 import math
-from ..attn_manager import model_manager
+from ..attention_manager import manager
 
 class NoiseScheduleVP:
     def __init__(
@@ -345,7 +345,7 @@ def model_wrapper(
     return model_fn
 
 
-class DPM_Solver(model_manager):
+class DPM_Solver(manager):
     def __init__(
         self,
         model_fn,

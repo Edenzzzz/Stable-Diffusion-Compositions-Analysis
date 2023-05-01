@@ -2,7 +2,7 @@ from structured_stable_diffusion.models.diffusion.ddpm import LatentDiffusion
 from collections import defaultdict
 import torch, numpy as np
 #@Wenxuan
-class model_manager():
+class manager():
     
     def __init__(self, **kwargs) -> None:
         """
@@ -128,12 +128,15 @@ class model_manager():
                 
                 #perturb selected rows or columns
                 if component == "key":
+                    #NOTE: shape automatically transposed in einsum; so same as value
+                    assert x.shape[1] == 77
                     original_std = torch.std(x[:, :, noun_idx])
                     x[:, :, noun_idx] += torch.randn_like(x[:, :, noun_idx]) * (strength * original_std)
 
                 elif component == "value":
+                    assert x.shape[1] == 77
                     original_std = torch.std(x[:, noun_idx, :])
-                    x[:, :, noun_idx] += torch.randn_like(x[:, :, noun_idx]) * strength * original_std
+                    x[:, noun_idx, :] += torch.randn_like(x[:, noun_idx, :]) * (strength * original_std)
                 return x
             
             return forward

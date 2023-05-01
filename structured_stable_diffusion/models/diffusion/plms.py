@@ -4,11 +4,11 @@ from collections import defaultdict
 import torch
 import numpy as np
 from tqdm import tqdm
-from structured_stable_diffusion.models.diffusion.attn_manager import model_manager
+from structured_stable_diffusion.models.diffusion.attention_manager import manager
 from structured_stable_diffusion.modules.diffusionmodules.util import make_ddim_sampling_parameters, make_ddim_timesteps, noise_like
 
 
-class PLMSSampler(model_manager):
+class PLMSSampler(manager):
     def __init__(self, model, schedule="linear", **kwargs):
         self.model = model #super.init will call self.model
         super().__init__(**kwargs)
