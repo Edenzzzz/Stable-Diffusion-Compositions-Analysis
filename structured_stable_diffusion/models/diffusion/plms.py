@@ -124,8 +124,15 @@ class PLMSSampler(manager):
                       unconditional_guidance_scale=1., unconditional_conditioning=None, skip=False, quiet=False, **kwargs):
         device = self.model.betas.device
         b = shape[0]
+
         if x_T is None:
-            img = torch.randn(shape, device=device)
+            #@Wenxuan same seed for every image if provided
+            if kwargs.get("seed", False):
+                generator = torch.Generator(device=device)
+                generator.manual_seed(kwargs["seed"])
+                img = torch.randn(shape, device=device, generator=generator)
+            else:
+                img = torch.randn(shape, device=device)
         else:
             img = x_T
 

@@ -262,8 +262,8 @@ def main():
                 "struct_value_key",
                 "vanilla",
                 ## perturb with gaussian noise with std = original_std * strength 
-                "gauss_perturb_value_0.1", "gauss_perturb_value_0.2", "gauss_perturb_value_0.4", "gauss_perturb_value_0.7",
-                "gauss_perturb_key_0.1", "gauss_perturb_key_0.2", "gauss_perturb_key_0.4", "gauss_perturb_key_0.7",
+                "gauss_perturb_value_0.7", "gauss_perturb_value_1.0", "gauss_perturb_value_3", "gauss_perturb_value_5",
+                "gauss_perturb_key_0.7", "gauss_perturb_key_1.0", "gauss_perturb_key_3", "gauss_perturb_key_5",
             ]
     
     with torch.no_grad():
@@ -276,7 +276,8 @@ def main():
                     if opt.scheduler == "plms":
                         sampler = PLMSSampler(model, option=option, save_attn_maps=save_attn_maps, noun_idx=noun_indices)
                     elif opt.scheduler == "ddim":
-                        sampler = DDIMSampler(model, option=option, save_attn_maps=save_attn_maps, noun_idx=noun_indices)
+                        # sampler = DDIMSampler(model, option=option, save_attn_maps=save_attn_maps, noun_idx=noun_indices)
+                        raise NotImplementedError("Haven't got time to modify DDIM for these experiments ")
                     else:
                         sampler = DPMSolverSampler(model, option=option, save_attn_maps=save_attn_maps, noun_idx=noun_indices)
 
@@ -309,13 +310,14 @@ def main():
                                 c = model.get_learned_conditioning(nps[0])
 
                             elif opt.conjunction:
-                                print(f"\nUsing structure diffusion with conjunction with option {option}")
+                                print(f"\nUsing conjunction with option {option}")
                                 c = [model.get_learned_conditioning(np) for np in nps]
                                 k_c = [c[0]] + align_sequence(c[0], c[1:], spans[1:])
                                 v_c = align_sequence(c[0], c[1:], spans[1:], single=True)
                                 c = {'k': k_c, 'v': v_c}
                                 
                             else:
+                                print(f"\nUsing Structure diffusion with option {option}")
                                 c = [model.get_learned_conditioning(np) for np in nps]
                                 k_c = c[:1]
                                 v_c = [c[0]] + align_sequence(c[0], c[1:], spans[1:])
@@ -335,6 +337,7 @@ def main():
                                                             save_attn_maps=save_attn_maps,
                                                             option=option,
                                                             noun_idx=noun_indices[prompt_idx],
+                                                            seed=opt.seed,
                                                             )
 
                             x_samples_ddim = model.decode_first_stage(samples_ddim)

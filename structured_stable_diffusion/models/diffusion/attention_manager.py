@@ -130,8 +130,8 @@ class manager():
                 if component == "key":
                     #NOTE: shape automatically transposed in einsum; so same as value
                     assert x.shape[1] == 77
-                    original_std = torch.std(x[:, :, noun_idx])
-                    x[:, :, noun_idx] += torch.randn_like(x[:, :, noun_idx]) * (strength * original_std)
+                    original_std = torch.std(x[:, noun_idx, :])
+                    x[:, noun_idx, :] += torch.randn_like(x[:, noun_idx, :]) * (strength * original_std)
 
                 elif component == "value":
                     assert x.shape[1] == 77

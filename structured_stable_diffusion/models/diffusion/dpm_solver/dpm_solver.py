@@ -1218,7 +1218,7 @@ class DPM_Solver(manager):
                 for step in range(order, steps + 1):
                     #@Wenxuan
                     #perturb last step only
-                    if step == steps and "perturb" in kwargs.get("option", None):
+                    if step == order and "perturb" in kwargs.get("option", None):
                         strength = float(kwargs["option"].split("_")[-1])
                         self.set_perturb_strength(strength, kwargs["noun_idx"])
                         

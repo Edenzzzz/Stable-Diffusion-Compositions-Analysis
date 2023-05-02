@@ -68,7 +68,14 @@ class DPMSolverSampler(manager):
 
         device = self.model.betas.device
         if x_T is None:
-            img = torch.randn(size, device=device)
+            
+            #@Wenxuan same seed for every image if provided
+            if kwargs.get("seed", False):
+                generator = torch.Generator(device=device)
+                generator.manual_seed(kwargs["seed"])
+                img = torch.randn(size, device=device, generator=generator)
+            else:
+                img = torch.randn(size, device=device)
         else:
             img = x_T
         
