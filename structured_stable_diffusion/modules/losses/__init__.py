@@ -1,1 +1,0 @@
-from structured_stable_diffusion.modules.losses.contperceptual import LPIPSWithDiscriminator

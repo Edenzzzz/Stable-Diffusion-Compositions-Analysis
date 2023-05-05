@@ -4,10 +4,11 @@ from nltk.tree import Tree
 import stanza
 import torch
 from itertools import islice
-from structured_stable_diffusion.util import instantiate_from_config
+from ldm.util import instantiate_from_config
 import os
 import sng_parser
 from PIL import Image
+from omegaconf import OmegaConf
 nlp = stanza.Pipeline(lang='en', processors='tokenize,pos,constituency')
 
 def preprocess_prompts(prompts):
@@ -92,6 +93,7 @@ def get_token_alignment_map(tree, tokens):
                 while prev + token != w:
                     prev += token
                     j += 1
+                    breakpoint()
                     token = get_token(tokens[j])
                     idx_map[i].append(j)
                     # assert j - i <= max_offset
@@ -183,6 +185,13 @@ def load_model_from_config(config, ckpt, verbose=False):
     model.eval()
     return model
 
+def load_model_wrapper(ckpt:str, config:str, device="cuda"):
+    
+    config = OmegaConf.load(f"{config}")
+    model = load_model_from_config(config, f"{ckpt}")
+    model = model.to(device)
+
+    return model
 
 def load_replacement(x):
     try:
@@ -227,7 +236,9 @@ def get_word_inds(text: str, word_place: int or str or list, tokenizer):
                 cur_len = 0
     return np.array(out)
 
-############## Visualization ##############
+############################## Visualization ##############################
+############################## Visualization ##############################
+############################## Visualization ##############################
 
 #NOTE: Can't eliminate margins???
 def make_im_subplots(*args, img_size, dpi=100, margin=0):
@@ -267,3 +278,4 @@ def opencv_compare_grid(compare_grid, indices, folder_names, outpath, grid_count
     cv2.putText(margin_grid, folder_names[1], (int(margin_grid.shape[1] * 0.6), 20), cv2.FONT_HERSHEY_SIMPLEX, 1, (2, 255, 3), 3, cv2.LINE_AA)
     img = Image.fromarray(margin_grid)
     img.save(os.path.join(outpath, f'compare_grid-{grid_count:04}.png'))
+

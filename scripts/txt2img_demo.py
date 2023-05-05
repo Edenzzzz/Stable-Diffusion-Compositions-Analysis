@@ -4,17 +4,15 @@
 #python scripts/txt2img_demo.py --prompt "A red teddy bear in a christmas hat sitting next to a glass" --scheduler dpm --denoise_steps 25 --parser_type constituency 
 ##################################################
 #To read multiple prompts from a csv file:
-#python scripts/txt2img_demo.py --from_file prompts.csv --parser_type constituency --scheduler dpm --compare True --denoise_steps 25 --save_v_matrix True
+#python scripts/txt2img_demo.py --from_file prompts/multi_obj_prompts.csv --parser_type constituency --scheduler dpm --compare True --denoise_steps 25 
 ##################################################
 #(::)
 import argparse, os, sys, glob
-from collections import defaultdict
 from ossaudiodev import SNDCTL_SEQ_CTRLRATE
 from ast import parse
-import cv2
 import torch
 import numpy as np
-from omegaconf import OmegaConf
+
 from PIL import Image
 from tqdm import tqdm, trange
 from einops import rearrange
@@ -24,15 +22,16 @@ from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import contextmanager, nullcontext
 
-from structured_stable_diffusion.models.diffusion.ddim import DDIMSampler
-from structured_stable_diffusion.models.diffusion.plms import PLMSSampler
-from structured_stable_diffusion.models.diffusion.dpm_solver import DPMSolverSampler
+#add the parent dir to allow access to ldm package
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from ldm.models.diffusion.ddim import DDIMSampler
+from ldm.models.diffusion.plms import PLMSSampler
+from ldm.models.diffusion.dpm_solver import DPMSolverSampler
 from scripts.txt2img_utils import *
-import cv2
 import matplotlib.pyplot as plt
 import logging 
 logging.basicConfig(level=logging.ERROR)
-
 
 
 def main():
@@ -51,11 +50,6 @@ def main():
         nargs="?",
         help="dir to write results to",
         default="outputs/txt2img-samples"
-    )
-    parser.add_argument(
-        "--skip_grid",
-        action='store_true',
-        help="do not save a grid, only individual samples. Helpful when evaluating lots of samples",
     )
     parser.add_argument(
         "--skip_save",
@@ -81,7 +75,7 @@ def main():
     )
     parser.add_argument(
         "--fixed_code",
-        action='store_true',
+        default=True,
         help="if enabled, uses the same starting code across samples ",
     )
     parser.add_argument(
@@ -152,7 +146,7 @@ def main():
     parser.add_argument(
         "--ckpt",
         type=str,
-        default="models/ldm/stable-diffusion-v1/sd-v1-4.ckpt",
+        default="models/ldm/stable-diffusion/sd-v1-4.ckpt",
         help="path to checkpoint of model",
     )
     parser.add_argument(
@@ -181,9 +175,9 @@ def main():
     )
     parser.add_argument(
         "--save_attn_maps",
-        default='False',
+        default='True',
         type=eval,
-        help='If True, the attention maps will be saved as a .pth file with the name same as the image'
+        help='If True, the attention maps will be saved as a .pt file with the name same as the image'
     )
 
     parser.add_argument(
@@ -203,7 +197,7 @@ def main():
     if opt.save_v_matrix:
         print("Saving value matrices")
     if opt.compare:
-        print("Comparing vanilla and modified value matrices using method in Structured diffusion paper")
+        print("Comparing vanilla and modified value matrices using method in structure diffusion paper")
     if opt.laion400m:
         print("Falling back to LAION 400M model...")
         opt.config = "configs/latent-diffusion/txt2img-1p4B-eval.yaml"
@@ -214,11 +208,8 @@ def main():
 
     seed_everything(opt.seed)
 
-    config = OmegaConf.load(f"{opt.config}")
-    model = load_model_from_config(config, f"{opt.ckpt}")
-
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    model = model.to(device)
+    model = load_model_wrapper(opt.ckpt, opt.config, device)
 
     os.makedirs(opt.outdir, exist_ok=True)
     outpath = opt.outdir
@@ -252,27 +243,44 @@ def main():
     start_code = None
     if opt.fixed_code:
         start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
-
+    #compare different v2 models
+    v2_models = [
+        # ("models/ldm/stable-diffusion/v2-1_768-v-ema.ckpt", "configs/stable-diffusion/v2-inference-v.yaml"),
+        ("models/ldm/stable-diffusion/v2-1_512-ema-pruned.ckpt", "configs/stable-diffusion/v2-inference.yaml"),
+        ("models/ldm/stable-diffusion/v2-1_768-ema-pruned.ckpt", "configs/stable-diffusion/v2-inference.yaml"),
+                 ]
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
     #apply method in the paper to value matrix, key matrix and try adding gaussian noise
     #NOTE: DO NOT change the format of these names 
+    
     options = ["vanilla"] if not opt.compare \
         else [ 
-                "struct_value", "struct_key", 
-                "struct_value_key",
-                "vanilla",
+                # "average_value", "average_key", 
+                # "average_value_key",
+                # "vanilla",
+                v2_models[0], v2_models[1],
                 ## perturb with gaussian noise with std = original_std * strength 
                 "gauss_perturb_value_0.7", "gauss_perturb_value_1.0", "gauss_perturb_value_3", "gauss_perturb_value_5",
                 "gauss_perturb_key_0.7", "gauss_perturb_key_1.0", "gauss_perturb_key_3", "gauss_perturb_key_5",
             ]
-    
     with torch.no_grad():
         with precision_scope("cuda"):
             with model.ema_scope():
                 for idx, option in enumerate(options):
                     
+                    #choose model and config 
+                    if isinstance(option, tuple):
+                        option, config = option
+                        ckpt = option
+                        option = os.path.split(option)[-1].split(".")[0]
+                        model = load_model_wrapper(ckpt, config, device)
+                    elif "v2" in option:
+                        #default best v2 
+                        model = load_model_wrapper("models/ldm/stable-diffusion/v2-1_768-ema-pruned.ckpt", "configs/stable-diffusion/v2-inference.yaml")
+
                     #@Wenxuan
-                    save_attn_maps = opt.save_attn_maps if "struct" in option else False
+                    ###set up the sampler for each option
+                    save_attn_maps = opt.save_attn_maps if "average" in option else False
                     if opt.scheduler == "plms":
                         sampler = PLMSSampler(model, option=option, save_attn_maps=save_attn_maps, noun_idx=noun_indices)
                     elif opt.scheduler == "ddim":
@@ -281,6 +289,7 @@ def main():
                     else:
                         sampler = DPMSolverSampler(model, option=option, save_attn_maps=save_attn_maps, noun_idx=noun_indices)
 
+                    
 
                     sample_path, base_count, grid_count = make_dir(outpath, option)
                     all_samples = list()
@@ -296,6 +305,7 @@ def main():
                             if opt.parser_type == 'constituency':
                                 doc = nlp(prompts[0])
                                 mytree = Tree.fromstring(str(doc.sentences[0].constituency))
+                                breakpoint()
                                 tokens = model.cond_stage_model.tokenizer.tokenize(prompts[0])
                                 nps, spans, noun_chunk = get_all_nps(mytree, prompts[0], tokens)
                             elif opt.parser_type == 'scene_graph':
@@ -305,7 +315,7 @@ def main():
                             
                             nps = [[np]*len(prompts) for np in nps]
 
-                            if "struct" not in option:
+                            if "average" not in option:
                                 print(f"\nUsing vanilla value matrix with option {option}")
                                 c = model.get_learned_conditioning(nps[0])
 
@@ -317,7 +327,7 @@ def main():
                                 c = {'k': k_c, 'v': v_c}
                                 
                             else:
-                                print(f"\nUsing Structure diffusion with option {option}")
+                                print(f"\nUsing structure diffusion with option {option}")
                                 c = [model.get_learned_conditioning(np) for np in nps]
                                 k_c = c[:1]
                                 v_c = [c[0]] + align_sequence(c[0], c[1:], spans[1:])
@@ -337,7 +347,7 @@ def main():
                                                             save_attn_maps=save_attn_maps,
                                                             option=option,
                                                             noun_idx=noun_indices[prompt_idx],
-                                                            seed=opt.seed,
+                                                            # seed=opt.seed,
                                                             )
 
                             x_samples_ddim = model.decode_first_stage(samples_ddim)
@@ -370,64 +380,68 @@ def main():
                                         os.makedirs(path, exist_ok=True)
                                         torch.save(store_object.v_matrix, os.path.join(path, f'{safe_filename}.pt'))
                                     base_count += 1  
+                            all_samples.append(x_checked_image_torch)
 
-                            if not opt.skip_grid:
-                                all_samples.append(x_checked_image_torch)
+                    if opt.compare:
+                        grid = torch.stack(all_samples, 0)
+                        grid = rearrange(grid, 'n b c h w -> (n b) h w c') * 255.
+                        if "compare_grid" not in locals():
+                            compare_grid = []
+                        compare_grid.append(grid)
 
-                    if not opt.skip_grid:
-                        if opt.compare:
-                            grid = torch.stack(all_samples, 0)
-                            grid = rearrange(grid, 'n b c h w -> (n b) h w c') * 255.
-                            if "compare_grid" not in locals():
-                                compare_grid = []
-                            compare_grid.append(grid)
+                        if len(compare_grid) == len(options) and opt.compare:
+                            compare_grid = torch.cat(compare_grid)
+                            #plot params
+                            ncols = len(options)
+                            nrows = compare_grid.shape[0] // ncols  
+                            assert compare_grid.shape[0] % ncols == 0, "Error: Number of samples not the same for each option"
+                            # generate indices showing images in parralel
+                            indices = torch.arange(compare_grid.shape[0]).reshape(ncols, compare_grid.shape[0] // ncols).T
+                            dpi = 100
 
-                            if len(compare_grid) == len(options) and opt.compare:
-                                compare_grid = torch.cat(compare_grid)
-                                #plot params
-                                ncols = len(options)
-                                nrows = compare_grid.shape[0] // ncols  
-                                assert compare_grid.shape[0] % ncols == 0, "Error: Number of samples not the same for each option"
-                                # generate indices showing images in parralel
-                                indices = torch.arange(compare_grid.shape[0]).reshape(ncols, compare_grid.shape[0] // ncols).T
-                                dpi = 100
+                            #best way to eliminate margins
+                            plt.figure(figsize=(ncols * opt.W // dpi, nrows * opt.H // dpi))
+                            gs = gridspec.GridSpec(nrows, ncols,
+                                                wspace=0.0, hspace=0.0,
+                                                top=1.-0.5 / (nrows+1), bottom=0.5 / (nrows+1), 
+                                                left=0.5 / (ncols+1), right=1-0.5 / (ncols+1)
+                                                ) 
+                            
+                            for i in range(nrows):
+                                for j in range(ncols):
+                                    ax = plt.subplot(gs[i,j])
+                                    if i == 0:
+                                        #a bit down there to save space for another title
+                                        title = ax.set_title(options[j], fontsize=20, c='r', pad=15)
+                                        # title.set_position([.5, 2.1])
 
-                                #best way to eliminate margins
-                                plt.figure(figsize=(ncols * opt.W // dpi, nrows * opt.H // dpi))
-                                gs = gridspec.GridSpec(nrows, ncols,
-                                                    wspace=0.0, hspace=0.0,
-                                                    # top=1.-0.5 / (nrows+1), bottom=0.5 / (nrows+1), 
-                                                    # left=0.5 / (ncols+1), right=1-0.5 / (ncols+1)
-                                                    ) 
-                                for i in range(nrows):
-                                    for j in range(ncols):
-                                        ax = plt.subplot(gs[i,j])
-                                        if i == 0:
-                                            ax.set_title(options[j], fontsize=19)
-                                        ax.imshow(compare_grid[indices[i][j]].cpu().numpy().astype(np.uint8))
-                                        ax.axis('off')
-                                plt.savefig(os.path.join(outpath, f'compare_grid-{grid_count:04}.png'))
-                                          
-                                #NOTE: Can't eliminate margins between subplots this way 
-                                # fig, axes = make_im_subplots(indices.shape[0], indices.shape[1], img_size=opt.W)
-                                # for i in range(axes.shape[0]):
-                                #     for j in range(axes.shape[1]):
-                                #         axes[i][j].imshow(compare_grid[indices[i][j]].cpu().numpy().astype(np.uint8))
-                                #         axes[i][j].axis('off')
-                                # fig.savefig(os.path.join(outpath, f'compare_grid-{grid_count:04}.png'))
-                                                                
-                                grid_count += 1
-                        else:
-                            #save single row grid 
-                            grid = torch.stack(all_samples, 0)
-                            grid = rearrange(grid, 'n b c h w -> (n b) c h w')
-                            grid = make_grid(grid, nrow=n_rows)
+                                    if j == 0:
+                                        ax.text(1, 2, data[i][0], fontsize=16)
 
-                            # to image
-                            grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
-                            img = Image.fromarray(grid.astype(np.uint8))
-                            img.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
+                                    ax.imshow(compare_grid[indices[i][j]].cpu().numpy().astype(np.uint8))
+                                    ax.axis('off')
+                            plt.savefig(os.path.join(outpath, f'compare_grid-{grid_count:04}.png'))
+                                        
+                            #NOTE: Can't eliminate margins between subplots this way 
+                            # fig, axes = make_im_subplots(indices.shape[0], indices.shape[1], img_size=opt.W)
+                            # for i in range(axes.shape[0]):
+                            #     for j in range(axes.shape[1]):
+                            #         axes[i][j].imshow(compare_grid[indices[i][j]].cpu().numpy().astype(np.uint8))
+                            #         axes[i][j].axis('off')
+                            # fig.savefig(os.path.join(outpath, f'compare_grid-{grid_count:04}.png'))
+                                                            
                             grid_count += 1
+                    else:
+                        #save single row grid 
+                        grid = torch.stack(all_samples, 0)
+                        grid = rearrange(grid, 'n b c h w -> (n b) c h w')
+                        grid = make_grid(grid, nrow=n_rows)
+
+                        # to image
+                        grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
+                        img = Image.fromarray(grid.astype(np.uint8))
+                        img.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
+                        grid_count += 1
 
         print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
             f" \nEnjoy.")

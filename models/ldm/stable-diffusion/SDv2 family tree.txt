@@ -1,0 +1,32 @@
+                                                            The Stable Diffusion v2 family (-v means v-objective: progressive distillation)
+
+                                                                        stable-diffusion-2-base
+                                                                            (512-base-ema.ckpt)
+                                                        (https://huggingface.co/stabilityai/stable-diffusion-2-base)
+                                                            /                                           \
+                                                           /                                             \
+                                                          /(fine-tune)                                     \(fine-tune)
+                                                         /                                                  \    
+                                                        /                                                    \            
+                                                       /                                                      \             
+                                            stable-diffusion-2                                          stable-diffusion-2-1-base
+                                            (768-v-ema.ckpt)                                                (v2-1_512-ema-pruned.ckpt)
+                                        (https://huggingface.co/stabilityai/stable-diffusion-2)             (https://huggingface.co/stabilityai/stable-diffusion-2-1-base)
+                                            /
+                                           /
+                                          /
+                                         /(fine-tune)
+                                        /
+                                       /
+                                stable-diffusion-2-1
+                                (v2-1_768-ema-pruned.ckpt)
+                            (https://huggingface.co/stabilityai/stable-diffusion-2-1)
+                                     /
+                                    /
+                                   /
+                                  /(fine-tune)
+                                 /
+                                /
+                            stable-diffusion-2-1-unclip
+                          (sd21-unclip-h.ckpt; sd21-unclip-l.ckpt)
+                        (https://huggingface.co/stabilityai/stable-diffusion-2-1-unclip)
