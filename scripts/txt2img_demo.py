@@ -4,7 +4,7 @@
 #python scripts/txt2img_demo.py --prompt "A red teddy bear in a christmas hat sitting next to a glass" --scheduler dpm --denoise_steps 25 --parser_type constituency 
 ##################################################
 #To read multiple prompts from a csv file:
-#python scripts/txt2img_demo.py --from_file prompts/multi_obj_prompts.csv --parser_type constituency --scheduler dpm --compare True --denoise_steps 25 
+#python scripts/txt2img_demo.py --from_file prompts/multi_obj_prompts.csv --parser_type constituency --scheduler dpm --compare True --denoise_steps 25
 ##################################################
 #(::)
 import argparse, os, sys, glob
@@ -183,13 +183,22 @@ def main():
     parser.add_argument(
         "--save_v_matrix",
         default='False',
+        type=eval,
         help="whether to save the value matrices"
     )
 
     parser.add_argument(
         "--compare",
         default="True",
+        type=eval,
         help="use both vanilla and modified value matrix and visualize the difference using a grid"
+    )
+    
+    parser.add_argument(
+        "--test_attn_overlaps",
+        default = "True",
+        type=eval,
+        help="test the overlap between the attention maps of the two concepts"
     )
 
     opt = parser.parse_args()
@@ -204,7 +213,7 @@ def main():
         opt.ckpt = "models/ldm/text2img-large/model.ckpt"
         opt.outdir = "outputs/txt2img-samples-laion400m"
     if opt.from_file:
-        opt.outdir = os.path.join(opt.outdir, os.path.basename(opt.from_file).split(".")[0])
+        opt.outdir = os.path.join(opt.outdir, os.path.split(opt.from_file)[-1].split(".")[0])
 
     seed_everything(opt.seed)
 
@@ -236,18 +245,24 @@ def main():
                 data = list(chunk(data, batch_size))
             except:
                 data = [batch_size * [d] for d in data]
-            noun_indices = [get_word_inds(data[idx][0], item, model.cond_stage_model.tokenizer) for idx, item in enumerate(noun_indices)]
-
-    
+            
+            #@Wenxuan extract noun indices after tokenizing
+            tokenizer = model.cond_stage_model.tokenizer
+            noun_indices = [get_word_inds(data[idx][0], item, tokenizer) for idx, item in enumerate(noun_indices)]
+            max_seq_length = max([len(get_seq_encode(prompt[0], tokenizer)) for prompt in data])
 
     start_code = None
+    if opt.test_attn_overlaps:
+        dot_overlaps = defaultdict(dict)
+        cross_entropy_overlaps = defaultdict(dict)
     if opt.fixed_code:
         start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
     #compare different v2 models
     v2_models = [
-        # ("models/ldm/stable-diffusion/v2-1_768-v-ema.ckpt", "configs/stable-diffusion/v2-inference-v.yaml"),
         ("models/ldm/stable-diffusion/v2-1_512-ema-pruned.ckpt", "configs/stable-diffusion/v2-inference.yaml"),
-        ("models/ldm/stable-diffusion/v2-1_768-ema-pruned.ckpt", "configs/stable-diffusion/v2-inference.yaml"),
+        ## these two won't work for some reason
+        # ("models/ldm/stable-diffusion/v2-1_768-v-ema.ckpt", "configs/stable-diffusion/v2-inference-v.yaml"),
+        # ("models/ldm/stable-diffusion/v2-1_768-ema-pruned.ckpt", "configs/stable-diffusion/v2-inference.yaml"),
                  ]
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
     #apply method in the paper to value matrix, key matrix and try adding gaussian noise
@@ -257,30 +272,37 @@ def main():
         else [ 
                 # "average_value", "average_key", 
                 # "average_value_key",
-                # "vanilla",
-                v2_models[0], v2_models[1],
+                "vanilla",
+                v2_models[0],
                 ## perturb with gaussian noise with std = original_std * strength 
-                "gauss_perturb_value_0.7", "gauss_perturb_value_1.0", "gauss_perturb_value_3", "gauss_perturb_value_5",
-                "gauss_perturb_key_0.7", "gauss_perturb_key_1.0", "gauss_perturb_key_3", "gauss_perturb_key_5",
+                # "gauss_perturb_value_0.7", "gauss_perturb_value_1.0", "gauss_perturb_value_3", "gauss_perturb_value_5",
+                # "gauss_perturb_key_0.7", "gauss_perturb_key_1.0", "gauss_perturb_key_3", "gauss_perturb_key_5",
             ]
+    
+    attn_ana_called = []
     with torch.no_grad():
         with precision_scope("cuda"):
             with model.ema_scope():
                 for idx, option in enumerate(options):
-                    
-                    #choose model and config 
+                    #choose model and config by option
                     if isinstance(option, tuple):
                         option, config = option
                         ckpt = option
-                        option = os.path.split(option)[-1].split(".")[0]
+                        # for plotting short title
+                        options[idx] = os.path.split(option)[-1].split(".")[0] 
                         model = load_model_wrapper(ckpt, config, device)
+                        tokenizer = model.cond_stage_model.tokenizer
                     elif "v2" in option:
                         #default best v2 
                         model = load_model_wrapper("models/ldm/stable-diffusion/v2-1_768-ema-pruned.ckpt", "configs/stable-diffusion/v2-inference.yaml")
+                    
+                    elif "model" not in locals():
+                        #default v1.4 model
+                        model = load_model_wrapper(opt.ckpt, opt.config, device)
 
                     #@Wenxuan
                     ###set up the sampler for each option
-                    save_attn_maps = opt.save_attn_maps if "average" in option else False
+                    save_attn_maps = opt.save_attn_maps
                     if opt.scheduler == "plms":
                         sampler = PLMSSampler(model, option=option, save_attn_maps=save_attn_maps, noun_idx=noun_indices)
                     elif opt.scheduler == "ddim":
@@ -288,10 +310,10 @@ def main():
                         raise NotImplementedError("Haven't got time to modify DDIM for these experiments ")
                     else:
                         sampler = DPMSolverSampler(model, option=option, save_attn_maps=save_attn_maps, noun_idx=noun_indices)
-
                     
+                    #set different save path for each option
+                    sample_path, base_count, grid_count = make_dir(outpath, options[idx], overwrite=True)
 
-                    sample_path, base_count, grid_count = make_dir(outpath, option)
                     all_samples = list()
                     for n in trange(opt.n_iter, desc="Sampling"):
                         for prompt_idx, prompts in enumerate(tqdm(data, desc="data")):
@@ -305,8 +327,7 @@ def main():
                             if opt.parser_type == 'constituency':
                                 doc = nlp(prompts[0])
                                 mytree = Tree.fromstring(str(doc.sentences[0].constituency))
-                                breakpoint()
-                                tokens = model.cond_stage_model.tokenizer.tokenize(prompts[0])
+                                tokens = tokenizer.tokenize(prompts[0])
                                 nps, spans, noun_chunk = get_all_nps(mytree, prompts[0], tokens)
                             elif opt.parser_type == 'scene_graph':
                                 nps, spans, noun_chunk = get_all_spans_from_scene_graph(prompts[0].split("\t")[0])
@@ -357,31 +378,63 @@ def main():
                             x_checked_image = x_samples_ddim
 
                             x_checked_image_torch = torch.from_numpy(x_checked_image).permute(0, 3, 1, 2)
+                            assert x_checked_image_torch.shape[0] == opt.n_samples
 
-                            if not opt.skip_save:
-                                for sid, x_sample in enumerate(x_checked_image_torch):
-                                    x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
-                                    img = Image.fromarray(x_sample.astype(np.uint8))          
-                                    try:
-                                        count = prompt_idx * opt.n_samples + sid
-                                        safe_filename = f"{n}-{count}-" + (filenames[count][:-4])[:150] + ".jpg"
-                                    except:
-                                        safe_filename = f"{base_count:05}-{n}-{prompts[0]}"[:100] + ".jpg"
-                                    img.save(os.path.join(sample_path, f"{safe_filename}"))
+                            for sid, x_sample in enumerate(x_checked_image_torch):
+                                x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
+                                img = Image.fromarray(x_sample.astype(np.uint8))          
+                                try:
+                                    count = prompt_idx * opt.n_samples + sid
+                                    safe_filename = f"{n}-{count}-" + (filenames[count][:-4])[:150] + ".jpg"
+                                except:
+                                    safe_filename = f"{base_count:05}-{n}-{prompts[0]}"[:100] + ".jpg"
+                                img.save(os.path.join(sample_path, f"{safe_filename}"))
+                                
+                                
+                                store_object = sampler if opt.scheduler != "dpm" else sampler.dpm_solver
+                                if save_attn_maps:
+                                    path = os.path.join(sample_path, "attn_maps")
+                                    os.makedirs(path, exist_ok=True)
+                                    torch.save(store_object.attn_maps, os.path.join(path, f'{safe_filename}.pt'))
+                                
+                                
+                                if opt.test_attn_overlaps:
+                                    attn_ana_called.append(option)
+                                    overlap = attn_map_analysis(store_object.attn_maps, 
+                                                noun_indices[prompt_idx],
+                                                prompts[0],
+                                                tokenizer,
+                                                option = "dot"
+                                    )
+                                    dot_overlaps[prompts[0]] = overlap
+
+                                    overlap = attn_map_analysis(store_object.attn_maps, 
+                                                noun_indices[prompt_idx],
+                                                prompts[0],
+                                                tokenizer,
+                                                option = "cross_entropy"
+                                                )
+                                    cross_entropy_overlaps[prompts[0]] = overlap
                                     
-                                    
-                                    store_object = sampler if opt.scheduler != "dpm" else sampler.dpm_solver
-                                    if save_attn_maps:
-                                        path = os.path.join(sample_path, "attn_maps")
-                                        os.makedirs(path, exist_ok=True)
-                                        torch.save(store_object.attn_maps, os.path.join(path, f'{safe_filename}.pt'))
-                                    if opt.save_v_matrix:
-                                        path = os.path.join(sample_path, "value_matrices")
-                                        os.makedirs(path, exist_ok=True)
-                                        torch.save(store_object.v_matrix, os.path.join(path, f'{safe_filename}.pt'))
-                                    base_count += 1  
+
+                                if opt.save_v_matrix:
+                                    path = os.path.join(sample_path, "value_matrices")
+                                    os.makedirs(path, exist_ok=True)
+                                    torch.save(store_object.v_matrix, os.path.join(path, f'{safe_filename}.pt'))
+                                base_count += 1  
                             all_samples.append(x_checked_image_torch)
+                    
+                    if opt.test_attn_overlaps:
+                        gs = make_grid(nrows=len(data), ncols=max_seq_length, W=opt.W, H=opt.H)
+                        show_overlap(gs, dot_overlaps, noun_indices, option="dot", tokenizer=tokenizer)
+                        plt.savefig(os.path.join(outpath, f'{options[idx]}_overlaps_dot.jpg'))
+                        plt.close()
 
+                        gs = make_grid(nrows=len(data), ncols=max_seq_length, W=opt.W, H=opt.H)
+                        show_overlap(gs, cross_entropy_overlaps, noun_indices, option="cross_entropy", tokenizer=tokenizer)
+                        plt.savefig(os.path.join(outpath, f'{options[idx]}_overlaps_cross_entropy.jpg'))
+                        plt.close()
+                        
                     if opt.compare:
                         grid = torch.stack(all_samples, 0)
                         grid = rearrange(grid, 'n b c h w -> (n b) h w c') * 255.
@@ -389,7 +442,7 @@ def main():
                             compare_grid = []
                         compare_grid.append(grid)
 
-                        if len(compare_grid) == len(options) and opt.compare:
+                        if len(compare_grid) == len(options):
                             compare_grid = torch.cat(compare_grid)
                             #plot params
                             ncols = len(options)
@@ -397,15 +450,9 @@ def main():
                             assert compare_grid.shape[0] % ncols == 0, "Error: Number of samples not the same for each option"
                             # generate indices showing images in parralel
                             indices = torch.arange(compare_grid.shape[0]).reshape(ncols, compare_grid.shape[0] // ncols).T
-                            dpi = 100
 
                             #best way to eliminate margins
-                            plt.figure(figsize=(ncols * opt.W // dpi, nrows * opt.H // dpi))
-                            gs = gridspec.GridSpec(nrows, ncols,
-                                                wspace=0.0, hspace=0.0,
-                                                top=1.-0.5 / (nrows+1), bottom=0.5 / (nrows+1), 
-                                                left=0.5 / (ncols+1), right=1-0.5 / (ncols+1)
-                                                ) 
+                            gs = make_grid(nrows, ncols, opt.W, opt.H)
                             
                             for i in range(nrows):
                                 for j in range(ncols):
@@ -413,39 +460,29 @@ def main():
                                     if i == 0:
                                         #a bit down there to save space for another title
                                         title = ax.set_title(options[j], fontsize=20, c='r', pad=15)
-                                        # title.set_position([.5, 2.1])
-
                                     if j == 0:
-                                        ax.text(1, 2, data[i][0], fontsize=16)
+                                        ax.text(0.5, 2, data[i][0], fontsize=16)
 
                                     ax.imshow(compare_grid[indices[i][j]].cpu().numpy().astype(np.uint8))
                                     ax.axis('off')
                             plt.savefig(os.path.join(outpath, f'compare_grid-{grid_count:04}.png'))
-                                        
-                            #NOTE: Can't eliminate margins between subplots this way 
-                            # fig, axes = make_im_subplots(indices.shape[0], indices.shape[1], img_size=opt.W)
-                            # for i in range(axes.shape[0]):
-                            #     for j in range(axes.shape[1]):
-                            #         axes[i][j].imshow(compare_grid[indices[i][j]].cpu().numpy().astype(np.uint8))
-                            #         axes[i][j].axis('off')
-                            # fig.savefig(os.path.join(outpath, f'compare_grid-{grid_count:04}.png'))
-                                                            
                             grid_count += 1
+
                     else:
                         #save single row grid 
                         grid = torch.stack(all_samples, 0)
                         grid = rearrange(grid, 'n b c h w -> (n b) c h w')
                         grid = make_grid(grid, nrow=n_rows)
-
                         # to image
                         grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
                         img = Image.fromarray(grid.astype(np.uint8))
                         img.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
                         grid_count += 1
 
+        
         print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
             f" \nEnjoy.")
-
+        print("attn_ana_called:", attn_ana_called)
 
 if __name__ == "__main__":
     main()

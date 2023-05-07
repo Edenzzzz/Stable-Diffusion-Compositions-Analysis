@@ -172,7 +172,7 @@ class CrossAttention(nn.Module):
 
     def forward(self, x, context=None, mask=None):
         q = self.to_q(x)
-        if isinstance(context, list):
+        if isinstance(context, list) and len(context) == 2:
             if self.struct_attn:
                 out = self.struct_qkv(q, context, mask)
             else:
@@ -180,6 +180,7 @@ class CrossAttention(nn.Module):
                 out = self.normal_qkv(q, context, mask)
         else:
             context = default(context, x)
+            context = context[0] if isinstance(context, list) else context
             out = self.normal_qkv(q, context, mask)
 
         return self.to_out(out)
@@ -234,6 +235,11 @@ class CrossAttention(nn.Module):
         sim_c  = [einsum('b i d, b j d -> b i j', q[true_bs:], k) * self.scale for k in k_c]
 
         attn_uc = sim_uc.softmax(dim=-1)
+        
+        #@Wenxuan tester
+        assert torch.mean(torch.sum(attn_uc, dim=-1)) > 0.99, "softmax not working column-wise"
+        assert attn_uc.shape[-1] == 77 #(batch_size, h*w, seq_len)
+        
         attn_c  = [sim.softmax(dim=-1) for sim in sim_c]
 
         if self.save_map and sim_uc.size(1) != sim_uc.size(2):
@@ -275,6 +281,7 @@ class CrossAttention(nn.Module):
 
         if self.save_map and sim.size(1) != sim.size(2):
             self.save_attn_maps(attn.chunk(2)[1])
+            self.save_v_matrix(v)
         out = einsum('b i j, b j d -> b i d', attn, v)
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
         
@@ -284,13 +291,13 @@ class CrossAttention(nn.Module):
         return self.to_k(context), self.to_v(context)
 
     def save_attn_maps(self, attn):
-        h = self.heads
+        heads = self.heads
         if isinstance(attn, list):
             height = width = int(math.sqrt(attn[0].size(1)))
-            self.attn_maps = [rearrange(m.detach(), '(b x) (h w) l -> b x h w l', x=h, h=height, w=width)[...,:20].cpu() for m in attn]
+            self.attn_maps = [rearrange(m.detach(), '(b x) (h w) l -> b x h w l', x=heads, h=height, w=width)[...,:35].cpu() for m in attn]
         else:
             height = width = int(math.sqrt(attn.size(1)))
-            self.attn_maps = rearrange(attn.detach(), '(b x) (h w) l -> b x h w l', x=h, h=height, w=width)[...,:20].cpu()
+            self.attn_maps = rearrange(attn.detach(), '(b x) (h w) l -> b x h w l', x=heads, h=height, w=width)[...,:35].cpu()
 
     def save_v_matrix(self, v_c):
         self.v_matrix = {"vanilla":v_c[0].detach().cpu(), "modified": (sum(v_c) / len(v_c)).detach().cpu() / len(v_c) }
@@ -376,7 +383,7 @@ class SpatialTransformer(nn.Module):
 
         for block in self.transformer_blocks:
             x = block(x, context=context)
-        breakpoint()
+
         if self.use_linear:
             x = self.proj_out(x)
         

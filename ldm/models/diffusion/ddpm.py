@@ -1322,10 +1322,11 @@ class DiffusionWrapper(pl.LightningModule):
             xc = torch.cat([x] + c_concat, dim=1)
             out = self.diffusion_model(xc, t)
         elif self.conditioning_key == 'crossattn':
-            if not self.sequential_cross_attn:
+            if not self.sequential_cross_attn and isinstance(c_crossattn, torch.Tensor):
                 cc = torch.cat(c_crossattn, 1)
             else:
                 cc = c_crossattn
+                
             if hasattr(self, "scripted_diffusion_model"):
                 # TorchScript changes names of the arguments
                 # with argument cc defined as context=cc scripted model will produce

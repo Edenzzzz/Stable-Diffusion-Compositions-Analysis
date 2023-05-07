@@ -9,6 +9,15 @@ import os
 import sng_parser
 from PIL import Image
 from omegaconf import OmegaConf
+import torch
+from typing import Dict, List, Tuple
+from einops import rearrange
+from collections import defaultdict
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+
+
 nlp = stanza.Pipeline(lang='en', processors='tokenize,pos,constituency')
 
 def preprocess_prompts(prompts):
@@ -93,7 +102,6 @@ def get_token_alignment_map(tree, tokens):
                 while prev + token != w:
                     prev += token
                     j += 1
-                    breakpoint()
                     token = get_token(tokens[j])
                     idx_map[i].append(j)
                     # assert j - i <= max_offset
@@ -204,10 +212,13 @@ def load_replacement(x):
         return x
 
 
-def make_dir(outpath, folder_name):
+def make_dir(outpath, folder_name, overwrite=True):
     sample_path = os.path.join(outpath, folder_name)
     os.makedirs(sample_path, exist_ok=True)
-    base_count = len(os.listdir(sample_path))
+    if overwrite:
+        base_count = 0
+    else:
+        base_count = len(os.listdir(sample_path))
     grid_count = len(os.listdir(outpath)) - 1
 
     return sample_path, base_count, grid_count
@@ -217,7 +228,24 @@ def get_word_inds(text: str, word_place: int or str or list, tokenizer):
     """
     Get the indices of the words in the embedding
     """
-    split_text = text.split(" ")
+    if "apple" in text:
+        pause = True
+    else:
+        pause= False
+    
+    #NOTE: A bug in the original code!!!!
+    #split punctuations in each word since tokenizer separates punc from nouns
+    import re
+    punc_split_text = re.split("([.,!?\"':;)(])", text.strip())
+    #remove last punctuation split
+    if punc_split_text[-1] == "":
+        punc_split_text = punc_split_text[:-1]
+
+    split_text = []
+    for item in punc_split_text:
+        split_text += item.strip().split(" ")
+
+        
     if type(word_place) is str:
         word_place = [i for i, word in enumerate(split_text) if word_place == word]
     elif type(word_place) is int:
@@ -234,14 +262,21 @@ def get_word_inds(text: str, word_place: int or str or list, tokenizer):
             if cur_len >= len(split_text[ptr]): # move to next word
                 ptr += 1
                 cur_len = 0
+
     return np.array(out)
+
+def get_seq_encode(text: str, tokenizer):
+    encode_str = [tokenizer.decode([item]).strip("#") for item in tokenizer.encode(text)]
+    if encode_str[0] == "<|startoftext|>":
+        encode_str = encode_str[1:-1]
+    return encode_str
 
 ############################## Visualization ##############################
 ############################## Visualization ##############################
 ############################## Visualization ##############################
 
 #NOTE: Can't eliminate margins???
-def make_im_subplots(*args, img_size, dpi=100, margin=0):
+def make_grid(*args, img_size, dpi=100, margin=0):
     """
     Make subplots for images
     @args : number of rows and columns
@@ -279,3 +314,117 @@ def opencv_compare_grid(compare_grid, indices, folder_names, outpath, grid_count
     img = Image.fromarray(margin_grid)
     img.save(os.path.join(outpath, f'compare_grid-{grid_count:04}.png'))
 
+
+def make_grid(nrows, ncols, W=10, H=10, dpi=100):
+
+    plt.figure(figsize=(ncols * W // dpi, nrows * H // dpi))
+    gs = gridspec.GridSpec(nrows, ncols,
+                        wspace=0.0, hspace=0.0,
+                        top=1.-0.5 / (nrows+1), bottom=0.5 / (nrows+1), 
+                        left=0.5 / (ncols+1), right=1-0.5 / (ncols+1)
+                        ) 
+    return gs
+
+
+def attn_map_analysis(
+                    attn_maps: Dict[str, List[List[torch.Tensor]]],
+                    noun_idx,
+                    prompt,
+                    tokenizer,
+                    option="dot",
+                    skip_anchor=False,
+                    normalize=False,
+                    ):
+
+    prompt = get_seq_encode(prompt, tokenizer)
+    overlaps = defaultdict(list)
+
+    assert option in ["dot", "cross_entropy"]
+
+    #compute overlap with each token
+    for layer_name in attn_maps.keys():
+        #attn_maps[layer_name][0][0]: (batch_size(1), num_heads, h, w, seq_len)
+                                                                        #not -1 because of <start> token
+        attn_map_anchor = attn_maps[layer_name][0][0].squeeze()[:, :, :, noun_idx].squeeze()# (num_heads, h, w) or (num_heads, h, w, num_tokens)
+
+        assert len(attn_map_anchor.shape) == 3 or len(attn_map_anchor.shape) == 4
+        if len(attn_map_anchor.shape) == 4:
+            print(f"noun in prompt \"{prompt}\" tokenized into multiple tokens!")
+            attn_map_anchor = attn_map_anchor.mean(dim=-1)
+
+        num_skip = 0
+        #get attn map of each token
+        for idx in range(len(prompt)):
+            if (idx in noun_idx and skip_anchor):
+                # num_skip -= 1
+                continue
+        
+            #shape: (batch_size(1), num_heads, h, w, seq_len)
+            attn_map = attn_maps[layer_name][0][0]
+            attn_map_i = attn_map.squeeze()[:, :, :, idx].squeeze()# (num_heads, h, w)
+
+            if len(attn_map_i.shape) == 4 :
+                print(f"noun prompt \"{prompt}\" tokenized into multiple tokens!")
+                # num_skip = attn_map_i.shape[-1] - 1
+                attn_map_anchor = attn_map_anchor.mean(dim=-1)
+
+            attn_map_i = attn_map_i.flatten(start_dim=1) # (num_heads, h*w)
+            attn_map_anchor = attn_map_anchor.flatten(start_dim=1) # (num_heads, h*w)
+            if option == "dot":
+                
+                spatial_dim = attn_map_anchor.shape[1] #h*w
+                #column probabilities sum to 1, distributing each token to a location
+                #(num_heads, h*w) * (num_heads, h*w, 1) -> (num_heads, 1, 1)
+                try:
+                    overlap = torch.bmm(attn_map_anchor.unsqueeze(1), attn_map_i.unsqueeze(-1)).squeeze()
+                except:
+                    print("Debug!!!!!!")
+                    breakpoint()
+                if normalize:
+                    overlap = overlap / spatial_dim
+                # overlap = torch.enisum("hs,hs->h", attn_map_anchor, attn_map_i) / spatial_dim
+
+                #average across all heads
+                overlap = torch.mean(overlap)
+            elif option == "cross_entropy":
+                overlap = F.cross_entropy(attn_map_i, attn_map_anchor, reduction="mean")
+
+            overlaps[layer_name].append(overlap)
+
+    return overlaps
+
+def show_overlap(gs,
+                overlaps:Dict[str, Dict[str, List[float]]],
+                noun_indices: List[int],
+                option,
+                tokenizer
+                ):
+    """
+    @overlaps: {prompt: {layer: [overlap]}}
+    """
+    plt.suptitle(option)
+    #average the layer dimension
+    for prompt_idx, prompt in enumerate(overlaps.keys()):
+        anchor_token = get_seq_encode(prompt, tokenizer)[noun_indices[prompt_idx][0] - 1].strip() #-1 for <start> token
+
+        tokens = get_seq_encode(prompt, tokenizer)
+        num_tokens = len(tokens)
+
+        
+        for token_idx in range(num_tokens):
+            overlap = []
+            token = tokens[token_idx]
+            #unflatten the layer dimension
+            for layer in overlaps[prompt].keys():
+                try:
+                    overlap += [overlaps[prompt][layer][token_idx]]
+                except:
+                    breakpoint()
+            #average over heads
+            mean = np.mean(overlap)
+            #visualize token-wise overlap across all layers
+            ax = plt.subplot(gs[prompt_idx, token_idx])
+            ax.hist(overlap, bins=6)
+            ax.axvline(mean, color='orange', linestyle='dashed', linewidth=1)
+            ax.text(mean*1.1, ax.get_ylim()[1]*0.9, 'Mean: {:.2f}'.format(mean))
+            ax.set_title(f"{anchor_token} vs {token}")
