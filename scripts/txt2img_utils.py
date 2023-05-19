@@ -299,6 +299,7 @@ def make_grid(*args, img_size, dpi=100, margin=0):
     fig.subplots_adjust(wspace=margin, hspace=margin)
     return fig, axes
 
+
 def opencv_compare_grid(compare_grid, indices, folder_names, outpath, grid_count):
     import cv2
     from torchvision.utils import make_grid
@@ -324,6 +325,7 @@ def make_grid(nrows, ncols, W=10, H=10, dpi=100):
                         left=0.5 / (ncols+1), right=1-0.5 / (ncols+1)
                         ) 
     return gs
+
 
 
 def attn_map_analysis(
@@ -390,7 +392,6 @@ def attn_map_analysis(
                 overlap = F.cross_entropy(attn_map_i, attn_map_anchor, reduction="mean")
 
             overlaps[layer_name].append(overlap)
-
     return overlaps
 
 def show_overlap(gs,
@@ -405,8 +406,11 @@ def show_overlap(gs,
     plt.suptitle(option)
     #average the layer dimension
     for prompt_idx, prompt in enumerate(overlaps.keys()):
-        anchor_token = get_seq_encode(prompt, tokenizer)[noun_indices[prompt_idx][0] - 1].strip() #-1 for <start> token
-
+        try:
+            anchor_token = get_seq_encode(prompt, tokenizer)[noun_indices[prompt_idx][0] - 1].strip() #-1 for <start> token
+        except:
+            print("Debug!]")
+            breakpoint()
         tokens = get_seq_encode(prompt, tokenizer)
         num_tokens = len(tokens)
 

@@ -237,7 +237,13 @@ def main():
             import pandas as pd
             df = pd.read_csv(opt.from_file)
             data = df["prompts"].tolist()
-            noun_indices = df["noun_idx"].tolist()
+            #if multiple nouns annotated, split by ,
+            if df["noun_idx"].dtype == object:
+                multi_noun_indices = df["noun_idx"].apply(lambda x: int(x.split(",")))
+                noun_indices = df["noun_idx"].apply(lambda x: int(x.split(",")[0]))
+            else:
+                noun_indices = df["noun_idx"].tolist()
+        
             try:
                 opt.end_idx = len(data) if opt.end_idx == -1 else opt.end_idx
                 data = data[:opt.end_idx]
@@ -273,7 +279,7 @@ def main():
                 # "average_value", "average_key", 
                 # "average_value_key",
                 "vanilla",
-                v2_models[0],
+                # v2_models[0],
                 ## perturb with gaussian noise with std = original_std * strength 
                 # "gauss_perturb_value_0.7", "gauss_perturb_value_1.0", "gauss_perturb_value_3", "gauss_perturb_value_5",
                 # "gauss_perturb_key_0.7", "gauss_perturb_key_1.0", "gauss_perturb_key_3", "gauss_perturb_key_5",
@@ -458,8 +464,7 @@ def main():
                                 for j in range(ncols):
                                     ax = plt.subplot(gs[i,j])
                                     if i == 0:
-                                        #a bit down there to save space for another title
-                                        title = ax.set_title(options[j], fontsize=20, c='r', pad=15)
+                                        title = ax.set_title(options[j], fontsize=20, c='r', pad=19)
                                     if j == 0:
                                         ax.text(0.5, 2, data[i][0], fontsize=16)
 
