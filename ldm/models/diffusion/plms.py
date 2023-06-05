@@ -124,7 +124,7 @@ class PLMSSampler(manager):
                       unconditional_guidance_scale=1., unconditional_conditioning=None, skip=False, quiet=False, **kwargs):
         device = self.model.betas.device
         b = shape[0]
-
+        noun_idx = kwargs.pop("noun_idx", None)
         if x_T is None:
             #@Wenxuan same seed for every image if provided
             if kwargs.get("seed", False):
@@ -161,9 +161,9 @@ class PLMSSampler(manager):
             ts = torch.full((b,), step, device=device, dtype=torch.long)
             ts_next = torch.full((b,), time_range[min(i + 1, len(time_range) - 1)], device=device, dtype=torch.long)
             #@wenxuan
-            if step == len(iterator) - 1 and "perturb" in self.option:
+            if step == len(iterator) - 1 and "perturb" in self.option and noun_idx is not None:
                 strength = float(kwargs["option"].split("_")[-1])
-                self.set_perturb_strength(strength, kwargs["noun_idx"])
+                self.set_perturb_strength(strength, noun_idx)
                 
             if mask is not None:
                 assert x0 is not None

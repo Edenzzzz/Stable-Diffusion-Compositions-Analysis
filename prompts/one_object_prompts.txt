@@ -1,0 +1,37 @@
+a blue backpack
+a red car
+a grey elephant
+a white sheep
+a brown elephant
+a white bird 
+a black goat
+a green apple
+a blue bowl
+a red teddy bear
+a black dog
+a blue truck
+a brown bear
+a black horse
+a pink scooter
+an orange suitcase
+a blue teddy bear 
+a red apple 
+a black car
+a white car 
+a black cat 
+a brown cat 
+a grey airplane 
+a black airplane 
+a red bird 
+a brown bird
+a golden dog 
+a golden cat 
+a white horse 
+a brown horse
+a black motorcycle
+a red motorcycle 
+a yellow motorcycle 
+a blue motorcycle 
+a blue car 
+a black truck 
+a red truck

@@ -24,7 +24,9 @@ from contextlib import contextmanager, nullcontext
 
 #add the parent dir to allow access to ldm package
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
+if os.path.split(os.getcwd())[-1] == 'scripts':
+    os.chdir('..')
+    
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
@@ -152,7 +154,7 @@ def main():
     parser.add_argument(
         "--seed",
         type=int,
-        default=42,
+        default=None,
         help="the seed (for reproducible sampling)",
     )
     parser.add_argument(
@@ -175,7 +177,7 @@ def main():
     )
     parser.add_argument(
         "--save_attn_maps",
-        default='True',
+        default='False',
         type=eval,
         help='If True, the attention maps will be saved as a .pt file with the name same as the image'
     )
@@ -189,18 +191,22 @@ def main():
 
     parser.add_argument(
         "--compare",
-        default="True",
+        default="False",
         type=eval,
         help="use both vanilla and modified value matrix and visualize the difference using a grid"
     )
     
     parser.add_argument(
         "--test_attn_overlaps",
-        default = "True",
-        type=eval,
+        action="store_true",
         help="test the overlap between the attention maps of the two concepts"
     )
-
+    
+    parser.add_argument(
+        "--no_grid",
+        action="store_true",
+        help="If True, the output images will not be stored as a grid"
+                        )
     opt = parser.parse_args()
 
     if opt.save_v_matrix:
@@ -214,8 +220,12 @@ def main():
         opt.outdir = "outputs/txt2img-samples-laion400m"
     if opt.from_file:
         opt.outdir = os.path.join(opt.outdir, os.path.split(opt.from_file)[-1].split(".")[0])
-
-    seed_everything(opt.seed)
+    
+    if opt.seed:
+        seed_everything(opt.seed)
+    else:
+        import warnings
+        warnings.warn("Sampling without a seed. This will lead to non-reproducible results.")
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model = load_model_wrapper(opt.ckpt, opt.config, device)
@@ -226,12 +236,7 @@ def main():
 
     batch_size = opt.n_samples
     n_rows = opt.n_rows if opt.n_rows > 0 else batch_size
-    if not opt.from_file:
-        prompt = opt.prompt
-        assert prompt is not None
-        data = [batch_size * [prompt]]
-        opt.from_file = ""
-    else:
+    if opt.from_file:
         print(f"reading prompts from {opt.from_file}")
         with open(opt.from_file, "r") as f:
             import pandas as pd
@@ -256,7 +261,13 @@ def main():
             tokenizer = model.cond_stage_model.tokenizer
             noun_indices = [get_word_inds(data[idx][0], item, tokenizer) for idx, item in enumerate(noun_indices)]
             max_seq_length = max([len(get_seq_encode(prompt[0], tokenizer)) for prompt in data])
-
+    else:
+        prompt = opt.prompt
+        assert prompt is not None
+        data = [batch_size * [prompt]]
+        opt.from_file = ""
+        noun_indices = [None] * len(data)
+        
     start_code = None
     if opt.test_attn_overlaps:
         dot_overlaps = defaultdict(dict)
@@ -274,18 +285,17 @@ def main():
     #apply method in the paper to value matrix, key matrix and try adding gaussian noise
     #NOTE: DO NOT change the format of these names 
     
-    options = ["vanilla"] if not opt.compare \
+    options = [v2_models[0]] if not opt.compare \
         else [ 
                 # "average_value", "average_key", 
                 # "average_value_key",
-                "vanilla",
-                # v2_models[0],
+                # "vanilla",
+                v2_models[0],
                 ## perturb with gaussian noise with std = original_std * strength 
                 # "gauss_perturb_value_0.7", "gauss_perturb_value_1.0", "gauss_perturb_value_3", "gauss_perturb_value_5",
                 # "gauss_perturb_key_0.7", "gauss_perturb_key_1.0", "gauss_perturb_key_3", "gauss_perturb_key_5",
             ]
     
-    attn_ana_called = []
     with torch.no_grad():
         with precision_scope("cuda"):
             with model.ema_scope():
@@ -315,7 +325,7 @@ def main():
                         # sampler = DDIMSampler(model, option=option, save_attn_maps=save_attn_maps, noun_idx=noun_indices)
                         raise NotImplementedError("Haven't got time to modify DDIM for these experiments ")
                     else:
-                        sampler = DPMSolverSampler(model, option=option, save_attn_maps=save_attn_maps, noun_idx=noun_indices)
+                        sampler = DPMSolverSampler(model, option=option, save_attn_mapsx=save_attn_maps, noun_idx=noun_indices)
                     
                     #set different save path for each option
                     sample_path, base_count, grid_count = make_dir(outpath, options[idx], overwrite=True)
@@ -374,7 +384,7 @@ def main():
                                                             save_attn_maps=save_attn_maps,
                                                             option=option,
                                                             noun_idx=noun_indices[prompt_idx],
-                                                            # seed=opt.seed,
+                                                            seed=opt.seed,
                                                             )
 
                             x_samples_ddim = model.decode_first_stage(samples_ddim)
@@ -405,7 +415,6 @@ def main():
                                 
                                 
                                 if opt.test_attn_overlaps:
-                                    attn_ana_called.append(option)
                                     overlap = attn_map_analysis(store_object.attn_maps, 
                                                 noun_indices[prompt_idx],
                                                 prompts[0],
@@ -440,54 +449,53 @@ def main():
                         show_overlap(gs, cross_entropy_overlaps, noun_indices, option="cross_entropy", tokenizer=tokenizer)
                         plt.savefig(os.path.join(outpath, f'{options[idx]}_overlaps_cross_entropy.jpg'))
                         plt.close()
-                        
-                    if opt.compare:
-                        grid = torch.stack(all_samples, 0)
-                        grid = rearrange(grid, 'n b c h w -> (n b) h w c') * 255.
-                        if "compare_grid" not in locals():
-                            compare_grid = []
-                        compare_grid.append(grid)
+                    if not opt.no_grid:
+                        if opt.compare:
+                            grid = torch.stack(all_samples, 0)
+                            grid = rearrange(grid, 'n b c h w -> (n b) h w c') * 255.
+                            if "compare_grid" not in locals():
+                                compare_grid = []
+                            compare_grid.append(grid)
 
-                        if len(compare_grid) == len(options):
-                            compare_grid = torch.cat(compare_grid)
-                            #plot params
-                            ncols = len(options)
-                            nrows = compare_grid.shape[0] // ncols  
-                            assert compare_grid.shape[0] % ncols == 0, "Error: Number of samples not the same for each option"
-                            # generate indices showing images in parralel
-                            indices = torch.arange(compare_grid.shape[0]).reshape(ncols, compare_grid.shape[0] // ncols).T
+                            if len(compare_grid) == len(options):
+                                compare_grid = torch.cat(compare_grid)
+                                #plot params
+                                ncols = len(options)
+                                nrows = compare_grid.shape[0] // ncols  
+                                assert compare_grid.shape[0] % ncols == 0, "Error: Number of samples not the same for each option"
+                                # generate indices showing images in parralel
+                                indices = torch.arange(compare_grid.shape[0]).reshape(ncols, compare_grid.shape[0] // ncols).T
 
-                            #best way to eliminate margins
-                            gs = make_grid(nrows, ncols, opt.W, opt.H)
-                            
-                            for i in range(nrows):
-                                for j in range(ncols):
-                                    ax = plt.subplot(gs[i,j])
-                                    if i == 0:
-                                        title = ax.set_title(options[j], fontsize=20, c='r', pad=19)
-                                    if j == 0:
-                                        ax.text(0.5, 2, data[i][0], fontsize=16)
+                                #best way to eliminate margins
+                                gs = make_grid(nrows, ncols, opt.W, opt.H)
+                                
+                                for i in range(nrows):
+                                    for j in range(ncols):
+                                        ax = plt.subplot(gs[i,j])
+                                        if i == 0:
+                                            title = ax.set_title(options[j], fontsize=20, c='r', pad=19)
+                                        if j == 0:
+                                            ax.text(0.5, 2, data[i][0], fontsize=16)
 
-                                    ax.imshow(compare_grid[indices[i][j]].cpu().numpy().astype(np.uint8))
-                                    ax.axis('off')
-                            plt.savefig(os.path.join(outpath, f'compare_grid-{grid_count:04}.png'))
+                                        ax.imshow(compare_grid[indices[i][j]].cpu().numpy().astype(np.uint8))
+                                        ax.axis('off')
+                                plt.savefig(os.path.join(outpath, f'compare_grid-{grid_count:04}.png'))
+                                grid_count += 1
+
+                        else:
+                            #save single row grid 
+                            grid = torch.stack(all_samples, 0)
+                            grid = rearrange(grid, 'n b c h w -> (n b) c h w')
+                            grid = make_grid(grid, nrow=n_rows)
+                            # to image
+                            grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
+                            img = Image.fromarray(grid.astype(np.uint8))
+                            img.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
                             grid_count += 1
-
-                    else:
-                        #save single row grid 
-                        grid = torch.stack(all_samples, 0)
-                        grid = rearrange(grid, 'n b c h w -> (n b) c h w')
-                        grid = make_grid(grid, nrow=n_rows)
-                        # to image
-                        grid = 255. * rearrange(grid, 'c h w -> h w c').cpu().numpy()
-                        img = Image.fromarray(grid.astype(np.uint8))
-                        img.save(os.path.join(outpath, f'grid-{grid_count:04}.png'))
-                        grid_count += 1
 
         
         print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
             f" \nEnjoy.")
-        print("attn_ana_called:", attn_ana_called)
 
 if __name__ == "__main__":
     main()

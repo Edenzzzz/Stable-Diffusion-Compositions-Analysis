@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
 
-nlp = stanza.Pipeline(lang='en', processors='tokenize,pos,constituency')
+nlp = stanza.Pipeline(lang='en', processors='tokenize,pos,constituency', verbose=False, use_gpu=True)
 
 def preprocess_prompts(prompts):
     if isinstance(prompts, (list, tuple)):
