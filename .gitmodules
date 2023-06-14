@@ -1,0 +1,3 @@
+[submodule "DETA"]
+	path = DETA
+	url = git@github.com:Edenzzzz/DETA.git

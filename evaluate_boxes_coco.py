@@ -40,7 +40,8 @@ preprocess = preprocess = WEIGHTS.transforms()
 model = detection.fasterrcnn_resnet50_fpn_v2(weights=WEIGHTS, 
 							  progress=True, 
 							  num_classes=len(CLASSES), 
-							  weights_backbone=torchvision.models.ResNet50_Weights.DEFAULT).to(DEVICE)
+							  weights_backbone=torchvision.models.ResNet50_Weights.DEFAULT,
+			                box_score_thresh=0.2).to(DEVICE)
 model.eval()
 detected = {}
 
