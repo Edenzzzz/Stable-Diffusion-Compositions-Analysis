@@ -12,15 +12,13 @@ from ossaudiodev import SNDCTL_SEQ_CTRLRATE
 from ast import parse
 import torch
 import numpy as np
-
 from PIL import Image
 from tqdm import tqdm, trange
 from einops import rearrange
 from torchvision.utils import make_grid
-from matplotlib import gridspec
 from pytorch_lightning import seed_everything
 from torch import autocast
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext
 
 #add the parent dir to allow access to ldm package
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -31,6 +29,7 @@ from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from ldm.models.diffusion.dpm_solver import DPMSolverSampler
 from scripts.txt2img_utils import *
+from scripts.vis_utils import *
 import matplotlib.pyplot as plt
 import logging 
 logging.basicConfig(level=logging.ERROR)
@@ -260,7 +259,7 @@ def main():
             #@Wenxuan extract noun indices after tokenizing
             tokenizer = model.cond_stage_model.tokenizer
             noun_indices = [get_word_inds(data[idx][0], item, tokenizer) for idx, item in enumerate(noun_indices)]
-            max_seq_length = max([len(get_seq_encode(prompt[0], tokenizer)) for prompt in data])
+            max_seq_length = max([len(get_tokenized_seq(prompt[0], tokenizer)) for prompt in data])
     else:
         prompt = opt.prompt
         assert prompt is not None
@@ -390,12 +389,11 @@ def main():
                             x_samples_ddim = model.decode_first_stage(samples_ddim)
                             x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
                             x_samples_ddim = x_samples_ddim.cpu().permute(0, 2, 3, 1).numpy()
-
                             x_checked_image = x_samples_ddim
-
                             x_checked_image_torch = torch.from_numpy(x_checked_image).permute(0, 3, 1, 2)
                             assert x_checked_image_torch.shape[0] == opt.n_samples
 
+                            #save individual samples
                             for sid, x_sample in enumerate(x_checked_image_torch):
                                 x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
                                 img = Image.fromarray(x_sample.astype(np.uint8))          
@@ -407,6 +405,7 @@ def main():
                                 img.save(os.path.join(sample_path, f"{safe_filename}"))
                                 
                                 
+
                                 store_object = sampler if opt.scheduler != "dpm" else sampler.dpm_solver
                                 if save_attn_maps:
                                     path = os.path.join(sample_path, "attn_maps")
@@ -439,6 +438,7 @@ def main():
                                 base_count += 1  
                             all_samples.append(x_checked_image_torch)
                     
+
                     if opt.test_attn_overlaps:
                         gs = make_grid(nrows=len(data), ncols=max_seq_length, W=opt.W, H=opt.H)
                         show_overlap(gs, dot_overlaps, noun_indices, option="dot", tokenizer=tokenizer)
@@ -449,6 +449,9 @@ def main():
                         show_overlap(gs, cross_entropy_overlaps, noun_indices, option="cross_entropy", tokenizer=tokenizer)
                         plt.savefig(os.path.join(outpath, f'{options[idx]}_overlaps_cross_entropy.jpg'))
                         plt.close()
+
+                    
+                    #save grid for model comparison
                     if not opt.no_grid:
                         if opt.compare:
                             grid = torch.stack(all_samples, 0)
@@ -481,7 +484,6 @@ def main():
                                         ax.axis('off')
                                 plt.savefig(os.path.join(outpath, f'compare_grid-{grid_count:04}.png'))
                                 grid_count += 1
-
                         else:
                             #save single row grid 
                             grid = torch.stack(all_samples, 0)
