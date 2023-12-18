@@ -1,0 +1,10 @@
+# ninja log v5
+0	5640	1685933820599479258	/home/wenxuan/DETA/models/ops/build/temp.linux-x86_64-cpython-37/home/wenxuan/DETA/models/ops/src/cpu/ms_deform_attn_cpu.o	f59a36603895c55f
+0	16453	1685933831403198909	/home/wenxuan/DETA/models/ops/build/temp.linux-x86_64-cpython-37/home/wenxuan/DETA/models/ops/src/cuda/ms_deform_attn_cuda.o	ab8df8d38fd55619
+1	19054	1685933834003131442	/home/wenxuan/DETA/models/ops/build/temp.linux-x86_64-cpython-37/home/wenxuan/DETA/models/ops/src/vision.o	356d5fe002efc031
+3	6612	1686004966650160727	/home/wenxuan/DETA/models/ops/build/temp.linux-x86_64-cpython-37/home/wenxuan/DETA/models/ops/src/cpu/ms_deform_attn_cpu.o	d413bb9379dd6e78
+3	19289	1686004979329844042	/home/wenxuan/DETA/models/ops/build/temp.linux-x86_64-cpython-37/home/wenxuan/DETA/models/ops/src/cuda/ms_deform_attn_cuda.o	f1a7e98bf02155f5
+3	24336	1686004984361718316	/home/wenxuan/DETA/models/ops/build/temp.linux-x86_64-cpython-37/home/wenxuan/DETA/models/ops/src/vision.o	c3d266b0eb13eace
+0	6274	1686005716681255673	/nobackup/wenxuan/DETA/models/ops/build/temp.linux-x86_64-cpython-37/nobackup/wenxuan/DETA/models/ops/src/cpu/ms_deform_attn_cpu.o	63e784de0ce199b1
+0	18156	1686005728561226782	/nobackup/wenxuan/DETA/models/ops/build/temp.linux-x86_64-cpython-37/nobackup/wenxuan/DETA/models/ops/src/cuda/ms_deform_attn_cuda.o	684e0e9dbf5de95c
+0	23760	1686005734153213181	/nobackup/wenxuan/DETA/models/ops/build/temp.linux-x86_64-cpython-37/nobackup/wenxuan/DETA/models/ops/src/vision.o	a92aa41cfd641efe

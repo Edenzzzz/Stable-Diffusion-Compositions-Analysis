@@ -1,6 +1,0 @@
-[submodule "DETA"]
-	path = DETA
-	url = git@github.com:Edenzzzz/DETA.git
-[submodule "ControlNet_attn_map"]
-	path = ControlNet_attn_map
-	url = git@github.com:Edenzzzz/ControlNet_attn_map.git
