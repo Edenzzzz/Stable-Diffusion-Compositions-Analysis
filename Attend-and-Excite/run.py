@@ -83,6 +83,7 @@ def run_on_prompt(prompt: List[str],
                   model: AttendAndExcitePipeline,
                   controller: AttentionStore,
                   token_indices: List[int],
+                  groups: List[List[int]], # EDIT
                   seed: torch.Generator,
                   config: RunConfig) -> Image.Image:
     if controller is not None:
@@ -90,7 +91,7 @@ def run_on_prompt(prompt: List[str],
     outputs = model(prompt=prompt,
                     attention_store=controller,
                     indices_to_alter=token_indices,
-                    groups=None, # EDIT
+                    groups=groups, # EDIT
                     attention_res=config.attention_res,
                     guidance_scale=config.guidance_scale,
                     generator=seed,

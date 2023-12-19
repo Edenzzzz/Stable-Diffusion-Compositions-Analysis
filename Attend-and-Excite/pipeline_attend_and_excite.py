@@ -258,15 +258,16 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
     # EDIT: custom loss 
     @staticmethod
     def _compute_loss_mine(max_attention_per_index: List[torch.Tensor], groups: List[List[int]], indices_to_alter: List[int], 
-                           return_losses: bool = False, loss_tpe="A&E"
+                           return_losses: bool = False, loss_type="l1"
                            ) -> torch.Tensor:
         alter_mapping = {idx:i for i,idx in enumerate(indices_to_alter)} # maps each value of an index to alter to it's positional index in the list
         group_mapping = {idx:curr_group[-1] for curr_group in groups for i,idx in enumerate(curr_group) if i<len(curr_group)-1} # maps each word idx to its anchor's idx. Anchors don't get an entry
-        
+        group_anchors = set(group_mapping.values())
+
         if loss_type == 'l1':
             loss_func = F.l1_loss
         elif loss_type == 'cos':
-            loss_func = lambda x,y: 1-F.cosine_similarity(x,y)
+            loss_func = lambda x,y: 1-F.cosine_similarity(x,y, dim=0)
         elif loss_type == "wasserstein":
             # Wasserstein distance for multivariate gaussian distributions
             loss_func = losses.Wasserstein_loss
@@ -275,15 +276,17 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
             loss_func = losses.Distance_Correlation
         else:
             print("No option for loss type ", loss_type)
-            return self._compute_loss(max_attention_per_index, return_losses)
-
-        losses = [loss_func(curr_max , max_attention_per_index[alter_mapping[group_mapping[idx]]])  # loss between current att map maxes and att map maxes of its anchor
+            return None
+        idx_convert = lambda i: max_attention_per_index[alter_mapping[i]]
+        all_losses = [loss_func(curr_max , idx_convert(group_mapping[idx]).detach())  # loss between current att map maxes and att map maxes of its anchor
                     if idx in group_mapping 
-                    else max(0, 1.-curr_max) # original AE loss for anchor words
-                    for idx,curr_max in zip(indices_to_alter, max_attention_per_index)]
-        loss = torch.mean(losses)
+                    # else max(0, 1.-curr_max) # original AE loss for anchor words
+                    else 0.7*max(0, 1.-curr_max) + 0.3*sum( [max(0, 1-loss_func(curr_max, idx_convert(other_anchor)) ) for other_anchor in group_anchors-{idx}] )/(len(group_anchors)-1) # original AE loss for anchor words plus overlap with other anchors
+                    for idx,curr_max in zip(indices_to_alter, max_attention_per_index)] #+ \
+
+        loss = sum(all_losses) / len(all_losses)
         if return_losses:
-            return loss, losses
+            return loss, all_losses
         else:
             return loss
 
@@ -580,7 +583,7 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                         if groups is None: # original A&E loss
                             loss = self._compute_loss(max_attention_per_index=max_attention_per_index)
                         else: # new A&E loss
-                            loss = self._compute_loss_mine(max_attention_per_index=max_attention_per_index, indices_to_alter=indices_to_alter, loss=loss, groups=groups)
+                            loss = self._compute_loss_mine(max_attention_per_index=max_attention_per_index, groups=groups, indices_to_alter=indices_to_alter, return_losses=False)
                         # If this is an iterative refinement step, verify we have reached the desired threshold for all
                         if i in thresholds.keys() and loss > 1. - thresholds[i]:
                             del noise_pred_text
@@ -610,7 +613,7 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                             if groups is None: # original A&E loss
                                 loss = self._compute_loss(max_attention_per_index=max_attention_per_index)
                             else: # new A&E loss
-                                loss = self._compute_loss_mine(max_attention_per_index=max_attention_per_index, groups=groups, indices_to_alter=indices_to_alter)
+                                loss = self._compute_loss_mine(max_attention_per_index=max_attention_per_index, groups=groups, indices_to_alter=indices_to_alter, return_losses=False)
                             if loss != 0:
                                 latents = self._update_latent(latents=latents, loss=loss,
                                                               step_size=scale_factor * np.sqrt(scale_range[i]))
