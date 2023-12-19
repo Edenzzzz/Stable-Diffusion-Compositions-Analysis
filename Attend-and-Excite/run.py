@@ -9,6 +9,7 @@ from config import RunConfig
 from pipeline_attend_and_excite import AttendAndExcitePipeline
 from utils import ptp_utils, vis_utils
 from utils.ptp_utils import AttentionStore
+import argparse
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -53,7 +54,7 @@ def read_associated_indices(path='multi_obj_prompts_with_association.csv', group
             [[1,2,4,5],
              [1,2]]
     '''
-    with open('multi_obj_prompts_with_association.csv', mode ='r') as f:
+    with open(path, mode ='r') as f:
         pairs=list(csv.reader(f))
     if pairs[0][0]=='prompts':
         pairs=pairs[1:]
@@ -102,17 +103,22 @@ def run_on_prompt(prompt: List[str],
                     smooth_attentions=config.smooth_attentions,
                     sigma=config.sigma,
                     kernel_size=config.kernel_size,
-                    sd_2_1=config.sd_2_1)
+                    sd_2_1=config.sd_2_1,
+                    loss=config.loss)
     image = outputs.images[0]
     return image
 
 
 @pyrallis.wrap()
 def main(config: RunConfig):
-    stable = load_model(config)
-    breakpoint()
-    token_indices = get_indices_to_alter(stable, config.prompt) if config.token_indices is None else config.token_indices
 
+    stable = load_model(config)
+    token_indices = []
+    token_indices = get_indices_to_alter(stable, config.prompt) if config.token_indices is None else config.token_indices
+        
+    # prompts, groups, indices_to_alter = read_associated_indices(path=config.prompt_csv)
+    # token_indices = indices_to_alter[prompts.index(config.prompt)]
+    # TODO: if prompt_csv is not None, for each prompt ...
     images = []
     for seed in config.seeds:
         print(f"Seed: {seed}")

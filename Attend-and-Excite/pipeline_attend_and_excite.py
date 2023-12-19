@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, List, Optional, Union, Tuple
 import numpy as np
 import torch
 from torch.nn import functional as F
-
+import losses
 from packaging import version
 from transformers import CLIPFeatureExtractor, CLIPTextModel, CLIPTokenizer
 
@@ -234,6 +234,8 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
             from_where=("up", "down", "mid"),
             is_cross=True,
             select=0)
+        # @Wenxuan: (n_patches, n_patches, seq_length), e.g. (16, 16, 77)
+        
         max_attention_per_index = self._compute_max_attention_per_index(
             attention_maps=attention_maps,
             indices_to_alter=indices_to_alter,
@@ -256,17 +258,21 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
     # EDIT: custom loss 
     @staticmethod
     def _compute_loss_mine(max_attention_per_index: List[torch.Tensor], groups: List[List[int]], indices_to_alter: List[int], 
-                           return_losses: bool = False,
+                           return_losses: bool = False, loss_tpe="A&E"
                            ) -> torch.Tensor:
         alter_mapping = {idx:i for i,idx in enumerate(indices_to_alter)} # maps each value of an index to alter to it's positional index in the list
         group_mapping = {idx:curr_group[-1] for curr_group in groups for i,idx in enumerate(curr_group) if i<len(curr_group)-1} # maps each word idx to its anchor's idx. Anchors don't get an entry
-
-        loss_type = 'l1'
-
+        
         if loss_type == 'l1':
             loss_func = F.l1_loss
         elif loss_type == 'cos':
             loss_func = lambda x,y: 1-F.cosine_similarity(x,y)
+        elif loss_type == "wasserstein":
+            # Wasserstein distance for multivariate gaussian distributions
+            loss_func = losses.Wasserstein_loss
+        elif loss_type == 'dc': 
+            # Distance correlation
+            loss_func = losses.Distance_Correlation
         else:
             print("No option for loss type ", loss_type)
             return self._compute_loss(max_attention_per_index, return_losses)
@@ -414,6 +420,7 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
             sigma: float = 0.5,
             kernel_size: int = 3,
             sd_2_1: bool = False,
+            loss: str = 'ae',
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -573,8 +580,7 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                         if groups is None: # original A&E loss
                             loss = self._compute_loss(max_attention_per_index=max_attention_per_index)
                         else: # new A&E loss
-                            loss = self._compute_loss_mine(max_attention_per_index=max_attention_per_index, groups=groups, indices_to_alter=indices_to_alter)
-
+                            loss = self._compute_loss_mine(max_attention_per_index=max_attention_per_index, indices_to_alter=indices_to_alter, loss=loss, groups=groups)
                         # If this is an iterative refinement step, verify we have reached the desired threshold for all
                         if i in thresholds.keys() and loss > 1. - thresholds[i]:
                             del noise_pred_text
@@ -582,7 +588,7 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                             loss, latents, max_attention_per_index = self._perform_iterative_refinement_step(
                                 latents=latents,
                                 indices_to_alter=indices_to_alter,
-                                groups=groups, #EDIT
+                                groups=groups, # EDIT
                                 loss=loss,
                                 threshold=thresholds[i],
                                 text_embeddings=prompt_embeds,
@@ -594,7 +600,8 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                                 smooth_attentions=smooth_attentions,
                                 sigma=sigma,
                                 kernel_size=kernel_size,
-                                normalize_eot=sd_2_1)
+                                normalize_eot=sd_2_1,
+                                )
 
                         # Perform gradient update
                         if i < max_iter_to_alter:
