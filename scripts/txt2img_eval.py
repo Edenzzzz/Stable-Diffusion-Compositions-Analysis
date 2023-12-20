@@ -255,11 +255,12 @@ def main():
                 data = list(chunk(data, batch_size))
             except:
                 data = [batch_size * [d] for d in data]
-            
+            # campus house
             #@Wenxuan extract noun indices after tokenizing
             tokenizer = model.cond_stage_model.tokenizer
             noun_indices = [get_word_inds(data[idx][0], item, tokenizer) for idx, item in enumerate(noun_indices)]
             max_seq_length = max([len(get_tokenized_seq(prompt[0], tokenizer)) for prompt in data])
+            breakpoint()
     else:
         prompt = opt.prompt
         assert prompt is not None
@@ -370,7 +371,7 @@ def main():
                                 c = {'k': k_c, 'v': v_c}
                             shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
                             #only save when using structure diffusion
-                            
+                            breakpoint()
                             samples_ddim, intermediates = sampler.sample(S=opt.denoise_steps,
                                                             conditioning=c,
                                                             batch_size=opt.n_samples,

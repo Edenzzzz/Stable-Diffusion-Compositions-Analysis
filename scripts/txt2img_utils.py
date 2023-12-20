@@ -237,7 +237,7 @@ def get_word_inds(text: str, word_place: int or str or list, tokenizer):
         pause= False
     
     #NOTE: A bug in the original code!!!!
-    #split punctuations in each word since tokenizer separates punc from nouns
+    # split punctuations in each word since tokenizer separates punc from nouns
     import re
     punc_split_text = re.split("([.,!?\"':;)(])", text.strip())
     #remove last punctuation split
