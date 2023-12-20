@@ -22,6 +22,15 @@ def Distance_Correlation(latent, control):
     return correlation_r
 
 
+def matrix_sqrt(mat):
+    # Eigenvalue decomposition
+    eigenvalues, eigenvectors = torch.linalg.eigh(mat)
+    # Compute the square root of the eigenvalues
+    sqrt_eigenvalues = torch.sqrt(eigenvalues)
+    # Reconstruct the matrix
+    return eigenvectors @ torch.diag(sqrt_eigenvalues) @ eigenvectors.T
+
+
 def Wasserstein_loss(x, y):
     # Ensure x and y have the same number of samples
     assert x.shape[0] == y.shape[0], "x and y must have the same number of samples"
@@ -37,8 +46,8 @@ def Wasserstein_loss(x, y):
     # Compute mean difference squared
     mean_diff_squared = torch.norm(mean_x - mean_y, p=2)**2
 
-    # Compute the trace term
-    sqrt_cov_product = torch.sqrtm(cov_x @ cov_y)
+    # Compute the trace term 
+    sqrt_cov_product = matrix_sqrt(cov_x @ cov_y)
     if not isinstance(sqrt_cov_product, torch.Tensor):
         sqrt_cov_product = sqrt_cov_product.real  # Handling complex eigenvalues
     trace_term = torch.trace(cov_x + cov_y - 2 * sqrt_cov_product)

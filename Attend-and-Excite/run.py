@@ -83,9 +83,19 @@ def run_on_prompt(prompt: List[str],
                   model: AttendAndExcitePipeline,
                   controller: AttentionStore,
                   token_indices: List[int],
-                  groups: List[List[int]], # EDIT
                   seed: torch.Generator,
-                  config: RunConfig) -> Image.Image:
+                  config: RunConfig,
+                  groups: List[List[int]] = None, # EDIT
+                ) -> Image.Image:
+    if groups is not None:
+        # Replace A&E's loss function with ours
+        assert config.loss_type in ["l1", "cos", "wasserstein", "dc"], "Invalid loss type"
+        
+        #NOTE: Seems lower lr doesn't change anything...
+        config.scale_factor = 20
+        config.scale_range = (1.0, 0.7)
+        print(f"Using {config.loss_type} loss with lr {config.scale_factor} ")
+        
     if controller is not None:
         ptp_utils.register_attention_control(model, controller)
     outputs = model(prompt=prompt,
@@ -105,7 +115,7 @@ def run_on_prompt(prompt: List[str],
                     sigma=config.sigma,
                     kernel_size=config.kernel_size,
                     sd_2_1=config.sd_2_1,
-                    loss=config.loss)
+                    loss_type=config.loss_type)
     image = outputs.images[0]
     return image
 

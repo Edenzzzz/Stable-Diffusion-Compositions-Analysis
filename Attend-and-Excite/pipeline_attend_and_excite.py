@@ -273,7 +273,9 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
         alter_mapping = {idx:i for i,idx in enumerate(indices_to_alter)} # maps each value of an index to alter to it's positional index in the list
         group_mapping = {idx:curr_group[-1] for curr_group in groups for i,idx in enumerate(curr_group) if i<len(curr_group)-1} # maps each word idx to its anchor's idx. Anchors don't get an entry
         group_anchors = set(group_mapping.values())
-        print(max_attention_per_index[0].size())
+    
+        # print(max_attention_per_index[0].size())
+        
         if loss_type == 'l1':
             loss_func = F.l1_loss
         elif loss_type == 'cos':
@@ -324,7 +326,8 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                                            sigma: float = 0.5,
                                            kernel_size: int = 3,
                                            max_refinement_steps: int = 20,
-                                           normalize_eot: bool = False):
+                                           normalize_eot: bool = False,
+                                           loss_type="cos"):
         """
         Performs the iterative latent refinement introduced in the paper. Here, we continuously update the latent
         code according to our loss objective until the given threshold is reached for all tokens.
@@ -355,7 +358,7 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
             if groups is None: # original A&E loss
                 loss, losses = self._compute_loss(max_attention_per_index=max_attention_per_index, return_losses=True)
             else: # new A&E loss
-                loss, losses = self._compute_loss_mine(max_attention_per_index=max_attention_per_index, groups=groups, indices_to_alter=indices_to_alter, return_losses=True)
+                loss, losses = self._compute_loss_mine(max_attention_per_index=max_attention_per_index, groups=groups, indices_to_alter=indices_to_alter, return_losses=True, loss_type=loss_type)
 
             if loss != 0:
                 latents = self._update_latent(latents, loss, step_size)
@@ -371,11 +374,11 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                 low_token = np.argmax(losses)
 
             low_word = self.tokenizer.decode(text_input.input_ids[0][indices_to_alter[low_token]])
-            print(f'\t Try {iteration}. {low_word} has a max attention of {max_attention_per_index[low_token]}')
+            # print(f'\t Try {iteration}. {low_word} has a max attention of {max_attention_per_index[low_token]}')
 
             if iteration >= max_refinement_steps:
-                print(f'\t Exceeded max number of iterations ({max_refinement_steps})! '
-                      f'Finished with a max attention of {max_attention_per_index[low_token]}')
+                print(f'\t Exceeded max number of iterations ({max_refinement_steps})! ')
+                    #   f'Finished with a max attention of {max_attention_per_index[low_token]}')
                 break
 
         # Run one more time but don't compute gradients and update the latents.
@@ -400,7 +403,7 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
         if groups is None: # original A&E loss
             loss, losses = self._compute_loss(max_attention_per_index=max_attention_per_index, return_losses=True)
         else: # new A&E loss
-            loss, losses = self._compute_loss_mine(max_attention_per_index=max_attention_per_index, groups=groups, indices_to_alter=indices_to_alter, return_losses=True)
+            loss, losses = self._compute_loss_mine(max_attention_per_index=max_attention_per_index, groups=groups, indices_to_alter=indices_to_alter, return_losses=True, loss_type=loss_type)
         print(f"\t Finished with loss of: {loss}")
         return loss, latents, max_attention_per_index
 
@@ -437,7 +440,7 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
             sigma: float = 0.5,
             kernel_size: int = 3,
             sd_2_1: bool = False,
-            loss: str = 'ae',
+            loss_type: str = 'cos',
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -599,7 +602,7 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                         if groups is None: # original A&E loss
                             loss = self._compute_loss(max_attention_per_index=max_attention_per_index)
                         else: # new A&E loss
-                            loss = self._compute_loss_mine(max_attention_per_index=max_attention_per_index, groups=groups, indices_to_alter=indices_to_alter, return_losses=False)
+                            loss = self._compute_loss_mine(max_attention_per_index=max_attention_per_index, groups=groups, indices_to_alter=indices_to_alter, return_losses=False, loss_type=loss_type)
                         # If this is an iterative refinement step, verify we have reached the desired threshold for all
                         if i in thresholds.keys() and loss > 1. - thresholds[i]:
                             del noise_pred_text
@@ -620,6 +623,7 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                                 sigma=sigma,
                                 kernel_size=kernel_size,
                                 normalize_eot=sd_2_1,
+                                loss_type=loss_type
                                 )
 
                         # Perform gradient update
@@ -629,7 +633,7 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                             if groups is None: # original A&E loss
                                 loss = self._compute_loss(max_attention_per_index=max_attention_per_index)
                             else: # new A&E loss
-                                loss = self._compute_loss_mine(max_attention_per_index=max_attention_per_index, groups=groups, indices_to_alter=indices_to_alter, return_losses=False)
+                                loss = self._compute_loss_mine(max_attention_per_index=max_attention_per_index, groups=groups, indices_to_alter=indices_to_alter, return_losses=False, loss_type=loss_type)
                             if loss != 0:
                                 latents = self._update_latent(latents=latents, loss=loss,
                                                               step_size=scale_factor * np.sqrt(scale_range[i]))

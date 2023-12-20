@@ -371,7 +371,6 @@ def main():
                                 c = {'k': k_c, 'v': v_c}
                             shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
                             #only save when using structure diffusion
-                            breakpoint()
                             samples_ddim, intermediates = sampler.sample(S=opt.denoise_steps,
                                                             conditioning=c,
                                                             batch_size=opt.n_samples,
