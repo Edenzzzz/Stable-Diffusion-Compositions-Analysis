@@ -194,7 +194,9 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                                          smooth_attentions: bool = False,
                                          sigma: float = 0.5,
                                          kernel_size: int = 3,
-                                         normalize_eot: bool = False) -> List[torch.Tensor]:
+                                         normalize_eot: bool = False,
+                                         keep_all_att: bool = False # EDIT: if we want to skip taking the max and use the entire flattened attention maps
+                                         ) -> List[torch.Tensor]:
         """ Computes the maximum attention value for each of the tokens we wish to alter. """
         last_idx = -1
         if normalize_eot:
@@ -217,7 +219,11 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                 smoothing = GaussianSmoothing(channels=1, kernel_size=kernel_size, sigma=sigma, dim=2).cuda()
                 input = F.pad(image.unsqueeze(0).unsqueeze(0), (1, 1, 1, 1), mode='reflect')
                 image = smoothing(input).squeeze(0).squeeze(0)
-            max_indices_list.append(image.max())
+            # max_indices_list.append(image.max()) # EDIT
+            if keep_all_att:
+                max_indices_list.append(image.view(-1))
+            else:
+                max_indices_list.append(image.max())
         return max_indices_list
 
     def _aggregate_and_get_max_attention_per_token(self, attention_store: AttentionStore,
@@ -226,7 +232,9 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                                                    smooth_attentions: bool = False,
                                                    sigma: float = 0.5,
                                                    kernel_size: int = 3,
-                                                   normalize_eot: bool = False):
+                                                   normalize_eot: bool = False,
+                                                   keep_all_att: bool = False # EDIT: if we want to skip taking the max and use the entire flattened attention maps
+                                                   ):
         """ Aggregates the attention for each token and computes the max activation value for each token to alter. """
         attention_maps = aggregate_attention(
             attention_store=attention_store,
@@ -242,7 +250,9 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
             smooth_attentions=smooth_attentions,
             sigma=sigma,
             kernel_size=kernel_size,
-            normalize_eot=normalize_eot)
+            normalize_eot=normalize_eot,
+            keep_all_att=keep_all_att # EDIT
+            )
         return max_attention_per_index
 
     @staticmethod
@@ -258,12 +268,12 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
     # EDIT: custom loss 
     @staticmethod
     def _compute_loss_mine(max_attention_per_index: List[torch.Tensor], groups: List[List[int]], indices_to_alter: List[int], 
-                           return_losses: bool = False, loss_type="l1"
+                           return_losses: bool = False, loss_type="cos"
                            ) -> torch.Tensor:
         alter_mapping = {idx:i for i,idx in enumerate(indices_to_alter)} # maps each value of an index to alter to it's positional index in the list
         group_mapping = {idx:curr_group[-1] for curr_group in groups for i,idx in enumerate(curr_group) if i<len(curr_group)-1} # maps each word idx to its anchor's idx. Anchors don't get an entry
         group_anchors = set(group_mapping.values())
-
+        print(max_attention_per_index[0].size())
         if loss_type == 'l1':
             loss_func = F.l1_loss
         elif loss_type == 'cos':
@@ -278,11 +288,12 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
             print("No option for loss type ", loss_type)
             return None
         idx_convert = lambda i: max_attention_per_index[alter_mapping[i]]
-        all_losses = [loss_func(curr_max , idx_convert(group_mapping[idx]).detach())  # loss between current att map maxes and att map maxes of its anchor
+        # print(indices_to_alter, group_mapping, max_attention_per_index)
+        all_losses = [loss_func(curr_att , idx_convert(group_mapping[idx]).detach())  # loss between current att map maxes and att map maxes of its anchor
                     if idx in group_mapping 
-                    # else max(0, 1.-curr_max) # original AE loss for anchor words
-                    else 0.7*max(0, 1.-curr_max) + 0.3*sum( [max(0, 1-loss_func(curr_max, idx_convert(other_anchor)) ) for other_anchor in group_anchors-{idx}] )/(len(group_anchors)-1) # original AE loss for anchor words plus overlap with other anchors
-                    for idx,curr_max in zip(indices_to_alter, max_attention_per_index)] #+ \
+                    # else max(0, 1.-torch.max(curr_att)) # original AE loss for anchor words
+                    else 0.7*max(0, 1.-torch.max(curr_att)) + 0.3*sum( [max(0, 1-loss_func(curr_att, idx_convert(other_anchor)) ) for other_anchor in group_anchors-{idx}] )/(len(group_anchors)-1) # original AE loss for anchor words plus overlap with other anchors
+                    for idx,curr_att in zip(indices_to_alter, max_attention_per_index)] #+ \
 
         loss = sum(all_losses) / len(all_losses)
         if return_losses:
@@ -335,7 +346,8 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                 smooth_attentions=smooth_attentions,
                 sigma=sigma,
                 kernel_size=kernel_size,
-                normalize_eot=normalize_eot
+                normalize_eot=normalize_eot,
+                keep_all_att=(groups is not None) # EDIT
                 )
 
             # loss, losses = self._compute_loss(max_attention_per_index, return_losses=True)
@@ -380,7 +392,9 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
             smooth_attentions=smooth_attentions,
             sigma=sigma,
             kernel_size=kernel_size,
-            normalize_eot=normalize_eot)
+            normalize_eot=normalize_eot,
+            keep_all_att=(groups is not None) # EDIT
+            )
         # loss, losses = self._compute_loss(max_attention_per_index, return_losses=True)
         '''EDIT'''
         if groups is None: # original A&E loss
@@ -574,7 +588,9 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                         smooth_attentions=smooth_attentions,
                         sigma=sigma,
                         kernel_size=kernel_size,
-                        normalize_eot=sd_2_1)
+                        normalize_eot=sd_2_1,
+                        keep_all_att=(groups is not None) # EDIT
+                        )
 
                     if not run_standard_sd:
 
