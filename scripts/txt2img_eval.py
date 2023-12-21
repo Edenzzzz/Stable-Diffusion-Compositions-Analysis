@@ -341,12 +341,12 @@ def main():
                             c = model.get_learned_conditioning(prompts)
 
                             if opt.parser_type == 'constituency':
-                                doc = nlp(prompts[0])
-                                mytree = Tree.fromstring(str(doc.sentences[0].constituency))
-                                tokens = tokenizer.tokenize(prompts[0])
-                                nps, spans, noun_chunk = get_all_nps(mytree, prompts[0], tokens)
+                                doc = nlp(prompts[prompt_idx])
+                                mytree = Tree.fromstring(str(doc.sentences[prompt_idx].constituency))
+                                tokens = tokenizer.tokenize(prompts[prompt_idx])
+                                nps, spans, noun_chunk = get_all_nps(mytree, prompts[prompt_idx], tokens)
                             elif opt.parser_type == 'scene_graph':
-                                nps, spans, noun_chunk = get_all_spans_from_scene_graph(prompts[0].split("\t")[0])
+                                nps, spans, noun_chunk = get_all_spans_from_scene_graph(prompts[prompt_idx].split("\t")[0])
                             else:
                                 raise NotImplementedError
                             

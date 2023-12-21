@@ -48,8 +48,6 @@ def Wasserstein_loss(x, y):
         x (torch.Tensor): (N, D): tensor of latent embeddings
         y (torch.Tensor): (N, D): tensor of control embeddings
 
-    Returns:
-        _type_: _description_
     """
     x = torch.atleast_2d(x)
     y = torch.atleast_2d(y)
@@ -61,8 +59,8 @@ def Wasserstein_loss(x, y):
     mean_y = torch.mean(y, dim=0)
 
     # Estimate covariance matrices
-    cov_x = torch.cov(x.T)
-    cov_y = torch.cov(y.T)
+    cov_x = torch.cov(x.T, correction=0)
+    cov_y = torch.cov(y.T, correction=0)
 
     # Compute mean difference squared
     mean_diff_squared = torch.norm(mean_x - mean_y, p=2)**2

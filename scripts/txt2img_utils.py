@@ -4,6 +4,8 @@ from nltk.tree import Tree
 import stanza
 import torch
 from itertools import islice
+import sys
+sys.path.append("../")
 from ldm.util import instantiate_from_config
 import os
 import sng_parser
@@ -230,11 +232,15 @@ def make_dir(outpath, folder_name, overwrite=True):
 def get_word_inds(text: str, word_place: int or str or list, tokenizer):
     """
     Get the indices of the words in the embedding
+    Args:
+        text: input prompt
+        word_place: Supports index of the word, the word itself, or a list of word indices.
+        tokenizer: tokenizer
     """
     if "apple" in text:
         pause = True
     else:
-        pause= False
+        pause = False
     
     #NOTE: A bug in the original code!!!!
     # split punctuations in each word since tokenizer separates punc from nouns

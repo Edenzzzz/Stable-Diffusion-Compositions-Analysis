@@ -10,11 +10,11 @@ from pipeline_attend_and_excite import AttendAndExcitePipeline
 from utils import ptp_utils, vis_utils
 from utils.ptp_utils import AttentionStore
 import argparse
-
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
-
 import csv
+from nltk.tree import Tree
+import stanza
 
 def load_model(config: RunConfig):
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
@@ -27,14 +27,18 @@ def load_model(config: RunConfig):
     return stable
 
 '''
+@Wenxuan 
+'''
+def parse_index_groups(csv_path='multi_obj_prompts_with_association.csv', group_split_char='|', shift_idxs=1):
+    pass
+'''
 EDIT 
 '''
-def read_associated_indices(path='multi_obj_prompts_with_association.csv', group_split_char='|', shift_idxs=1):
+def read_associated_indices(path='multi_obj_prompts_with_association.csv', group_split_char='|'):
     '''
     Inputs:
         path: path to file
         group_split_char: the character that separates tokens of an association group
-        shift_idxs: original A&E repo shifts tokens index up by 1?
 
     Returns groups, indices_to_alter
     groups:
@@ -59,8 +63,9 @@ def read_associated_indices(path='multi_obj_prompts_with_association.csv', group
     if pairs[0][0]=='prompts':
         pairs=pairs[1:]
 
+    shift_idx = 1 # skip <start> token
     prompts = [pair[0] for pair in pairs]
-    groups = [[ [int(i)+shift_idxs for i in group_str.split(group_split_char)] for group_str in pair[1].split(',')] for pair in pairs]
+    groups = [[ [int(i) + shift_idx for i in group_str.split(group_split_char)] for group_str in pair[1].split(',')] for pair in pairs]
     indices_to_alter = [ sorted([i for l2 in l1 for i in l2 ] ) for l1 in groups]
 
     return prompts, groups, indices_to_alter
@@ -132,30 +137,35 @@ def main(config: RunConfig):
 
     stable = load_model(config)
     token_indices = []
-    token_indices = get_indices_to_alter(stable, config.prompt) if config.token_indices is None else config.token_indices
-        
-    # prompts, groups, indices_to_alter = read_associated_indices(path=config.prompt_csv)
-    # token_indices = indices_to_alter[prompts.index(config.prompt)]
+    if config.prompt_csv is not None:
+        prompts, groups, token_indices = read_associated_indices(path=config.prompt_csv)
+    else:
+        token_indices = [get_indices_to_alter(stable, config.prompt) if config.token_indices is None else config.token_indices]
+        prompt = [config.prompt]
+        groups = [None]
+
     # TODO: if prompt_csv is not None, for each prompt ...
     images = []
     for seed in config.seeds:
         print(f"Seed: {seed}")
-        g = torch.Generator('cuda').manual_seed(seed)
-        controller = AttentionStore()
-        image = run_on_prompt(prompt=config.prompt,
-                              model=stable,
-                              controller=controller,
-                              token_indices=token_indices,
-                              seed=g,
-                              config=config)
-        prompt_output_path = config.output_path / config.prompt
-        prompt_output_path.mkdir(exist_ok=True, parents=True)
-        image.save(prompt_output_path / f'{seed}.png')
-        images.append(image)
+        for i, prompt in enumerate(prompts):
+            g = torch.Generator('cuda').manual_seed(seed)
+            controller = AttentionStore()
+            image = run_on_prompt(prompt=prompt,
+                                model=stable,
+                                controller=controller,
+                                token_indices=token_indices[i],
+                                groups=groups[i],
+                                seed=g,
+                                config=config)
+            prompt_output_path = config.output_path / config.prompt
+            prompt_output_path.mkdir(exist_ok=True, parents=True)
+            image.save(prompt_output_path / f'{seed}.png')
+            images.append(image)
 
-    # save a grid of results across all seeds
-    joined_image = vis_utils.get_image_grid(images)
-    joined_image.save(config.output_path / f'{config.prompt}.png')
+        # save a grid of results across all seeds
+        joined_image = vis_utils.get_image_grid(images)
+        joined_image.save(config.output_path / f'{config.prompt}.png')
 
 
 if __name__ == '__main__':
