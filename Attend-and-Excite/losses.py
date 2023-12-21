@@ -2,7 +2,19 @@ import torch
 import torch.nn.functional as F
 
 def Distance_Correlation(latent, control):
+    """ Distance correlation from https://github.com/zhenxingjian/Partial_Distance_Correlation
+    Measures the similarity between embedding spaces
 
+    Args:
+        latent (torch.Tensor): (N, D): tensor of latent embeddings
+        control (torch.Tensor): (N, D): tensor of control embeddings
+
+    Returns:
+        _type_: _description_
+    """
+    latent = torch.atleast_2d(latent)
+    control = torch.atleast_2d(control)
+    
     latent = F.normalize(latent)
     control = F.normalize(control)
 
@@ -21,20 +33,29 @@ def Distance_Correlation(latent, control):
     # correlation_r = torch.pow(Gamma_XY,2)/(Gamma_XX * Gamma_YY + 1e-9)
     return correlation_r
 
-
+@torch.autocast("cuda" if torch.cuda.is_available() else "cpu", enabled=False)
 def matrix_sqrt(mat):
-    # Eigenvalue decomposition
-    eigenvalues, eigenvectors = torch.linalg.eigh(mat)
-    # Compute the square root of the eigenvalues
-    sqrt_eigenvalues = torch.sqrt(eigenvalues)
-    # Reconstruct the matrix
-    return eigenvectors @ torch.diag(sqrt_eigenvalues) @ eigenvectors.T
+    mat = mat.float()
+    U, S, V = torch.linalg.svd(mat)
+    sqrt_S = torch.sqrt(S)
+    return U @ torch.diag(sqrt_S) @ V.T
 
 
 def Wasserstein_loss(x, y):
+    """
+    Wasserstein distance between two multivariate Gaussians
+    Args:
+        x (torch.Tensor): (N, D): tensor of latent embeddings
+        y (torch.Tensor): (N, D): tensor of control embeddings
+
+    Returns:
+        _type_: _description_
+    """
+    x = torch.atleast_2d(x)
+    y = torch.atleast_2d(y)
+    
     # Ensure x and y have the same number of samples
     assert x.shape[0] == y.shape[0], "x and y must have the same number of samples"
-
     # Estimate means
     mean_x = torch.mean(x, dim=0)
     mean_y = torch.mean(y, dim=0)

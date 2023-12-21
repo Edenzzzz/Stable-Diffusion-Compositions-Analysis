@@ -92,8 +92,15 @@ def run_on_prompt(prompt: List[str],
         assert config.loss_type in ["l1", "cos", "wasserstein", "dc"], "Invalid loss type"
         
         #NOTE: Seems lower lr doesn't change anything...
-        config.scale_factor = 20
-        config.scale_range = (1.0, 0.7)
+        if config.loss_type == "cos":
+            config.scale_factor = 20
+            config.scale_range = (1.0, 0.3)
+            config.max_iter_to_alter += 5
+        elif config.loss_type == "dc":
+            config.scale_factor = 30
+            config.scale_range = (1.0, 0.3)
+            config.max_iter_to_alter += 10
+            
         print(f"Using {config.loss_type} loss with lr {config.scale_factor} ")
         
     if controller is not None:
