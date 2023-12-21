@@ -6,8 +6,8 @@ from typing import Dict, List
 @dataclass
 class RunConfig:
     # Guiding text prompt
-    prompt: str
-    prompt_csv: str = "Attend-and-Excite/multi_obj_prompts_with_association.csv"
+    prompt: str = None
+    prompt_csv: str = "multi_obj_prompts_with_association.csv"
     # Whether to use Stable Diffusion v2.1
     sd_2_1: bool = False
     # Which token indices to alter with attend-and-excite

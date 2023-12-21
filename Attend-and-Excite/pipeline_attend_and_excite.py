@@ -294,8 +294,7 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
         all_losses = [loss_func(curr_att , idx_convert(group_mapping[idx]).detach())  # loss between current att map maxes and att map maxes of its anchor
                     if idx in group_mapping 
                     # original AE loss for anchor words + overlap loss 
-                    else #0.7*max(0, 1.-torch.max(curr_att)) \  
-                        + 0.3*sum( [max(0, 1-loss_func(curr_att, idx_convert(other_anchor)) ) for other_anchor in group_anchors-{idx}] )/(len(group_anchors)-1) # original AE loss for anchor words plus overlap with other anchors
+                    else 0.7*max(0, 1.-torch.max(curr_att)) + 0.3*sum( [max(0, 1-loss_func(curr_att, idx_convert(other_anchor)) ) for other_anchor in group_anchors-{idx}] )/(len(group_anchors)-1) # original AE loss for anchor words plus overlap with other anchors
                     for idx, curr_att in zip(indices_to_alter, max_attention_per_index)] 
 
         loss = sum(all_losses) / len(all_losses)

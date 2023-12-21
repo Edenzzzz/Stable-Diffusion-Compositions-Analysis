@@ -99,14 +99,14 @@ def run_on_prompt(prompt: List[str],
         #NOTE: Seems lower lr doesn't change anything...
         if config.loss_type == "cos":
             config.scale_factor = 20
-            config.scale_range = (1.0, 0.3)
+            config.scale_range = (1.0, 0.5)
             config.max_iter_to_alter += 5
         elif config.loss_type == "dc":
             config.scale_factor = 30
             config.scale_range = (1.0, 0.3)
             config.max_iter_to_alter += 10
             
-        print(f"Using {config.loss_type} loss with lr {config.scale_factor} ")
+        print(f"Using {config.loss_type} loss with lr {config.scale_factor}")
         
     if controller is not None:
         ptp_utils.register_attention_control(model, controller)
@@ -137,18 +137,19 @@ def main(config: RunConfig):
 
     stable = load_model(config)
     token_indices = []
+    # Load a list of prompts and indices if specified; otherwise just use the one prompt
     if config.prompt_csv is not None:
         prompts, groups, token_indices = read_associated_indices(path=config.prompt_csv)
     else:
         token_indices = [get_indices_to_alter(stable, config.prompt) if config.token_indices is None else config.token_indices]
-        prompt = [config.prompt]
+        prompts = [config.prompt]
         groups = [None]
 
-    # TODO: if prompt_csv is not None, for each prompt ...
-    images = []
-    for seed in config.seeds:
-        print(f"Seed: {seed}")
-        for i, prompt in enumerate(prompts):
+    
+    # images = []
+    for i, prompt in enumerate(prompts):
+        for seed in config.seeds:
+            print(f"Seed: {seed}")
             g = torch.Generator('cuda').manual_seed(seed)
             controller = AttentionStore()
             image = run_on_prompt(prompt=prompt,
@@ -158,14 +159,16 @@ def main(config: RunConfig):
                                 groups=groups[i],
                                 seed=g,
                                 config=config)
-            prompt_output_path = config.output_path / config.prompt
+            
+            subfolder = config.loss_type if groups[i] is not None else "A&E"
+            prompt_output_path = config.output_path / subfolder
             prompt_output_path.mkdir(exist_ok=True, parents=True)
-            image.save(prompt_output_path / f'{seed}.png')
-            images.append(image)
+            image.save(prompt_output_path / f'seed={seed}_{prompt}.png')
+            # images.append(image)
 
         # save a grid of results across all seeds
-        joined_image = vis_utils.get_image_grid(images)
-        joined_image.save(config.output_path / f'{config.prompt}.png')
+        # joined_image = vis_utils.get_image_grid(images)
+        # joined_image.save(config.output_path / f'{prompt}.png')
 
 
 if __name__ == '__main__':
