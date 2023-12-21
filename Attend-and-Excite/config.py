@@ -41,6 +41,6 @@ class RunConfig:
     # Whether to save cross attention maps for the final results
     save_cross_attention_maps: bool = False
     loss_type: str = 'cos'
-    
+    ae_ratio: float = 0.7
     def __post_init__(self):
         self.output_path.mkdir(exist_ok=True, parents=True)

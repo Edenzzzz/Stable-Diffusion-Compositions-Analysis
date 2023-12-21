@@ -268,7 +268,7 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
     # EDIT: custom loss 
     @staticmethod
     def _compute_loss_mine(max_attention_per_index: List[torch.Tensor], groups: List[List[int]], indices_to_alter: List[int], 
-                           return_losses: bool = False, loss_type="cos"
+                           return_losses: bool = False, loss_type="cos", ae_ratio=0.7
                            ) -> torch.Tensor:
         alter_mapping = {idx:i for i,idx in enumerate(indices_to_alter)} # maps each value of an index to alter to it's positional index in the list
         group_mapping = {idx:curr_group[-1] for curr_group in groups for i,idx in enumerate(curr_group) if i<len(curr_group)-1} # maps each word idx to its anchor's idx. Anchors don't get an entry
@@ -290,12 +290,18 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
             print("No option for loss type ", loss_type)
             return None
         idx_convert = lambda i: max_attention_per_index[alter_mapping[i]]
-        # print(indices_to_alter, group_mapping, max_attention_per_index)
-        all_losses = [loss_func(curr_att , idx_convert(group_mapping[idx]).detach())  # loss between current att map maxes and att map maxes of its anchor
-                    if idx in group_mapping 
-                    # original AE loss for anchor words + overlap loss 
-                    else 0.7*max(0, 1.-torch.max(curr_att)) + 0.3*sum( [max(0, 1-loss_func(curr_att, idx_convert(other_anchor)) ) for other_anchor in group_anchors-{idx}] )/(len(group_anchors)-1) # original AE loss for anchor words plus overlap with other anchors
-                    for idx, curr_att in zip(indices_to_alter, max_attention_per_index)] 
+        all_losses = []
+        for idx in indices_to_alter:
+            if idx in group_mapping:
+                loss = loss_func(idx_convert(idx), idx_convert(group_mapping[idx]).detach())
+            else:
+                loss = ae_ratio * max(0, 1.-torch.max(idx_convert(idx))) + (1 - ae_ratio) * sum( [max(0, 1-loss_func(idx_convert(idx), idx_convert(other_anchor)) ) for other_anchor in group_anchors-{idx}] )/(len(group_anchors)-1)
+            all_losses.append(loss)
+        # all_losses = [loss_func(curr_att , idx_convert(group_mapping[idx]).detach())  # loss between current att map maxes and att map maxes of its anchor
+        #             if idx in group_mapping 
+        #             # original AE loss for anchor words + overlap loss 
+        #             else 0.7*max(0, 1.-torch.max(curr_att)) + 0.3*sum( [max(0, 1-loss_func(curr_att, idx_convert(other_anchor)) ) for other_anchor in group_anchors-{idx}] )/(len(group_anchors)-1) # original AE loss for anchor words plus overlap with other anchors
+        #             for idx, curr_att in zip(indices_to_alter, max_attention_per_index)] 
 
         loss = sum(all_losses) / len(all_losses)
         if return_losses:
@@ -327,7 +333,8 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                                            kernel_size: int = 3,
                                            max_refinement_steps: int = 20,
                                            normalize_eot: bool = False,
-                                           loss_type="cos"):
+                                           loss_type: str = "cos",
+                                           ae_ratio: float = 0.7):
         """
         Performs the iterative latent refinement introduced in the paper. Here, we continuously update the latent
         code according to our loss objective until the given threshold is reached for all tokens.
@@ -358,7 +365,12 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
             if groups is None: # original A&E loss
                 loss, losses = self._compute_loss(max_attention_per_index=max_attention_per_index, return_losses=True)
             else: # new A&E loss
-                loss, losses = self._compute_loss_mine(max_attention_per_index=max_attention_per_index, groups=groups, indices_to_alter=indices_to_alter, return_losses=True, loss_type=loss_type)
+                loss, losses = self._compute_loss_mine(max_attention_per_index=max_attention_per_index,
+                                                       groups=groups,
+                                                       indices_to_alter=indices_to_alter,
+                                                       return_losses=True,
+                                                       loss_type=loss_type,
+                                                       ae_ratio=ae_ratio)
 
             if loss != 0:
                 latents = self._update_latent(latents, loss, step_size)
@@ -403,7 +415,13 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
         if groups is None: # original A&E loss
             loss, losses = self._compute_loss(max_attention_per_index=max_attention_per_index, return_losses=True)
         else: # new A&E loss
-            loss, losses = self._compute_loss_mine(max_attention_per_index=max_attention_per_index, groups=groups, indices_to_alter=indices_to_alter, return_losses=True, loss_type=loss_type)
+            loss, losses = self._compute_loss_mine(max_attention_per_index=max_attention_per_index,
+                                                   groups=groups,
+                                                   indices_to_alter=indices_to_alter,
+                                                   return_losses=True,
+                                                   loss_type=loss_type,
+                                                   ae_ratio=ae_ratio
+                                                )
         print(f"\t Finished with loss of: {loss}")
         return loss, latents, max_attention_per_index
 
@@ -441,6 +459,7 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
             kernel_size: int = 3,
             sd_2_1: bool = False,
             loss_type: str = 'cos',
+            ae_ratio: float = 0.7
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -592,7 +611,7 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                         sigma=sigma,
                         kernel_size=kernel_size,
                         normalize_eot=sd_2_1,
-                        keep_all_att=(groups is not None) # EDIT
+                        keep_all_att=(groups is not None), # EDIT
                         )
 
                     if not run_standard_sd:
@@ -602,7 +621,12 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                         if groups is None: # original A&E loss
                             loss = self._compute_loss(max_attention_per_index=max_attention_per_index)
                         else: # new A&E loss
-                            loss = self._compute_loss_mine(max_attention_per_index=max_attention_per_index, groups=groups, indices_to_alter=indices_to_alter, return_losses=False, loss_type=loss_type)
+                            loss = self._compute_loss_mine(max_attention_per_index=max_attention_per_index,
+                                                           groups=groups,
+                                                           indices_to_alter=indices_to_alter,
+                                                           return_losses=False,
+                                                           loss_type=loss_type,
+                                                           ae_ratio=ae_ratio)
                         # If this is an iterative refinement step, verify we have reached the desired threshold for all
                         if i in thresholds.keys() and loss > 1. - thresholds[i]:
                             del noise_pred_text
@@ -623,7 +647,8 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                                 sigma=sigma,
                                 kernel_size=kernel_size,
                                 normalize_eot=sd_2_1,
-                                loss_type=loss_type
+                                loss_type=loss_type,
+                                ae_ratio=ae_ratio
                                 )
 
                         # Perform gradient update
@@ -633,7 +658,12 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                             if groups is None: # original A&E loss
                                 loss = self._compute_loss(max_attention_per_index=max_attention_per_index)
                             else: # new A&E loss
-                                loss = self._compute_loss_mine(max_attention_per_index=max_attention_per_index, groups=groups, indices_to_alter=indices_to_alter, return_losses=False, loss_type=loss_type)
+                                loss = self._compute_loss_mine(max_attention_per_index=max_attention_per_index,
+                                                               groups=groups,
+                                                               indices_to_alter=indices_to_alter,
+                                                               return_losses=False,
+                                                               loss_type=loss_type,
+                                                               ae_ratio=ae_ratio)
                             if loss != 0:
                                 latents = self._update_latent(latents=latents, loss=loss,
                                                               step_size=scale_factor * np.sqrt(scale_range[i]))

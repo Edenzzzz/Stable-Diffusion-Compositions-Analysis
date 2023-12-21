@@ -91,6 +91,7 @@ def run_on_prompt(prompt: List[str],
                   seed: torch.Generator,
                   config: RunConfig,
                   groups: List[List[int]] = None, # EDIT
+                  ae_ratio: float = 0.7
                 ) -> Image.Image:
     if groups is not None:
         # Replace A&E's loss function with ours
@@ -106,7 +107,7 @@ def run_on_prompt(prompt: List[str],
             config.scale_range = (1.0, 0.3)
             config.max_iter_to_alter += 10
             
-        print(f"Using {config.loss_type} loss with lr {config.scale_factor}")
+        print(f"Using {config.loss_type} loss with lr {config.scale_factor} and {ae_ratio} * A&E_loss + {round(1 - ae_ratio, 2)} * {config.loss_type}")
         
     if controller is not None:
         ptp_utils.register_attention_control(model, controller)
@@ -127,7 +128,8 @@ def run_on_prompt(prompt: List[str],
                     sigma=config.sigma,
                     kernel_size=config.kernel_size,
                     sd_2_1=config.sd_2_1,
-                    loss_type=config.loss_type)
+                    loss_type=config.loss_type,
+                    ae_ratio=ae_ratio)
     image = outputs.images[0]
     return image
 
