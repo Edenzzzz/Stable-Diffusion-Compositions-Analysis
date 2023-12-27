@@ -258,9 +258,10 @@ def main():
             # campus house
             #@Wenxuan extract noun indices after tokenizing
             tokenizer = model.cond_stage_model.tokenizer
-            noun_indices = [get_word_inds(data[idx][0], item, tokenizer) for idx, item in enumerate(noun_indices)]
+            noun_indices = [get_word_inds(tokenizer,data[idx][0], item) for idx, item in enumerate(noun_indices)]
             max_seq_length = max([len(get_tokenized_seq(prompt[0], tokenizer)) for prompt in data])
-            breakpoint()
+            # breakpoint()
+            # get_word_inds(tokenizer, "a, catand a dog", "cat")
     else:
         prompt = opt.prompt
         assert prompt is not None
@@ -342,8 +343,9 @@ def main():
 
                             if opt.parser_type == 'constituency':
                                 doc = nlp(prompts[prompt_idx])
-                                mytree = Tree.fromstring(str(doc.sentences[prompt_idx].constituency))
+                                mytree = Tree.fromstring(str(doc.sentences[0].constituency))
                                 tokens = tokenizer.tokenize(prompts[prompt_idx])
+                                breakpoint()
                                 nps, spans, noun_chunk = get_all_nps(mytree, prompts[prompt_idx], tokens)
                             elif opt.parser_type == 'scene_graph':
                                 nps, spans, noun_chunk = get_all_spans_from_scene_graph(prompts[prompt_idx].split("\t")[0])

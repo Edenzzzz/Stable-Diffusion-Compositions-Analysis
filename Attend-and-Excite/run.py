@@ -4,7 +4,7 @@ from typing import List
 import pyrallis
 import torch
 from PIL import Image
-
+import pandas as pd
 from config import RunConfig
 from pipeline_attend_and_excite import AttendAndExcitePipeline
 from utils import ptp_utils, vis_utils
@@ -15,6 +15,12 @@ warnings.filterwarnings("ignore", category=UserWarning)
 import csv
 from nltk.tree import Tree
 import stanza
+import tqdm
+import os
+from transformers import AutoTokenizer
+import re, nltk
+
+nlp = stanza.Pipeline(lang='en', processors='tokenize,pos,constituency', verbose=False, use_gpu=True)
 
 def load_model(config: RunConfig):
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
@@ -25,12 +31,65 @@ def load_model(config: RunConfig):
         stable_diffusion_version = "CompVis/stable-diffusion-v1-4"
     stable = AttendAndExcitePipeline.from_pretrained(stable_diffusion_version).to(device)
     return stable
+    
+'''
+@Wenxuan
+'''
 
-'''
-@Wenxuan 
-'''
-def parse_index_groups(csv_path='multi_obj_prompts_with_association.csv', group_split_char='|', shift_idxs=1):
-    pass
+def traverse_tree(tree, arg_dict):
+    
+    breakpoint()
+    
+    if type(tree) != nltk.tree.tree.Tree:
+        return 
+    elif tree.label() == "NP":
+        # A noun phrase is reached
+        noun_idx = None
+        for subtree in tree:
+            traverse_tree(subtree, arg_dict)
+            if subtree.label() in ["NN", "NNS"]:
+                # Found a noun, save its index
+                noun_idx = arg_dict['token_idx']
+            elif subtree.label() == "JJ":
+                # Found an adjective, add its index
+                adjs.append(str(arg_dict['token_idx']))
+            # Increment token_idx for each word
+            arg_dict['token_idx'] += 1
+        
+        # If a noun is found in this NP, create a group
+        if noun_idx is not None:
+            group = '|'.join(adjs) + '|' + str(noun_idx)
+            arg_dict['groups'].append(group)
+            breakpoint()
+    # else:
+    #     # If it's a composed phrase, recursively traverse
+    #     traverse_tree(tree, arg_dict)
+        
+
+
+
+def parse_index_groups(txt_path='ABC-6K.txt', group_split_char='|'):
+    prompts = open(txt_path, 'r').read().split('\n')
+    association_groups = []
+
+    for prompt in tqdm.tqdm(prompts, "Parsing prompts"):
+        doc = nlp(prompt)  # Assuming 'nlp' is defined and works on 'prompt'
+        tree = Tree.fromstring(str(doc.sentences[0].constituency))
+
+        # Initialize argument dictionary
+        arg_dict = {'token_idx': 0, 'anchor_idx': -1, 'adjs': [], 'groups': []}
+        traverse_tree(tree[-1], arg_dict)
+
+        # Join groups with commas and add the leading '|' for the first group
+        formatted_groups = ','.join(arg_dict['groups'])
+
+        association_groups.append(formatted_groups)
+        breakpoint()
+    # Create DataFrame and save to CSV
+    df = pd.DataFrame({'prompts': prompts, 'association_idxs': association_groups})
+    df.to_csv(txt_path[:-4] + '.csv', index=False)
+
+
 '''
 EDIT 
 '''
@@ -39,7 +98,6 @@ def read_associated_indices(path='multi_obj_prompts_with_association.csv', group
     Inputs:
         path: path to file
         group_split_char: the character that separates tokens of an association group
-
     Returns groups, indices_to_alter
     groups:
         A list of lists of lists of int indices:
@@ -63,11 +121,10 @@ def read_associated_indices(path='multi_obj_prompts_with_association.csv', group
     if pairs[0][0]=='prompts':
         pairs=pairs[1:]
 
-    shift_idx = 1 # skip <start> token
+    offset = 1  # skip <start> token
     prompts = [pair[0] for pair in pairs]
-    groups = [[ [int(i) + shift_idx for i in group_str.split(group_split_char)] for group_str in pair[1].split(',')] for pair in pairs]
+    groups = [[ [int(i) + offset for i in group_str.split(group_split_char)] for group_str in pair[1].split(',')] for pair in pairs]
     indices_to_alter = [ sorted([i for l2 in l1 for i in l2 ] ) for l1 in groups]
-
     return prompts, groups, indices_to_alter
 
 
@@ -99,9 +156,9 @@ def run_on_prompt(prompt: List[str],
         
         #NOTE: Seems lower lr doesn't change anything...
         if config.loss_type == "cos":
-            config.scale_factor = 20
-            config.scale_range = (1.0, 0.5)
-            config.max_iter_to_alter += 5
+            config.scale_factor = 10
+            config.scale_range = (1.0, 0.2)
+            # config.max_iter_to_alter += 5
         elif config.loss_type == "dc":
             config.scale_factor = 30
             config.scale_range = (1.0, 0.3)
@@ -139,13 +196,20 @@ def main(config: RunConfig):
 
     stable = load_model(config)
     token_indices = []
+    
+    # Parse and label coco prompts
+    # if not os.path.exists('ABC-6K.csv'):
+    #     parse_index_groups(txt_path='ABC-6K.txt', group_split_char='|')
+    
     # Load a list of prompts and indices if specified; otherwise just use the one prompt
-    if config.prompt_csv is not None:
-        prompts, groups, token_indices = read_associated_indices(path=config.prompt_csv)
-    else:
+    if config.prompt is not None:
         token_indices = [get_indices_to_alter(stable, config.prompt) if config.token_indices is None else config.token_indices]
         prompts = [config.prompt]
         groups = [None]
+    elif config.prompt_csv is not None:
+        prompts, groups, token_indices = read_associated_indices(path=config.prompt_csv)
+    else:
+        raise ValueError("Must specify either prompt or prompt_csv")
 
     
     # images = []

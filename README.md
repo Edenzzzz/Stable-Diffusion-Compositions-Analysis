@@ -43,14 +43,14 @@ Our method is training-free and can be applied to the trained stable diffusion c
 
 To generate an image, run
 ```
-python scripts/txt2img_demo.py --prompt "A red teddy bear in a christmas hat sitting next to a glass" --plms --parser_type constituency
+python scripts/txt2img_eval.py --prompt "A red teddy bear in a christmas hat sitting next to a glass" --plms --parser_type constituency
 ```
 
 By default, the guidance scale is set to 7.5 and output image size is 512x512. We only support PLMS sampling and batch size equals to 1 for now. 
 Apart from the default arguments from [Stable Diffusion](https://github.com/CompVis/stable-diffusion/blob/21f890f9da3cfbeaba8e2ac3c425ee9e998d5229/scripts/txt2img.py), we add ```--parser_type``` and ```--conjunction```.
 
 ```
-usage: txt2img_demo.py [-h] [--prompt [PROMPT]] ...
+usage: txt2img_eval.py [-h] [--prompt [PROMPT]] ...
                        [--parser_type {constituency,scene_graph}] [--conjunction] [--save_attn_maps]
 
 optional arguments:
@@ -63,7 +63,7 @@ optional arguments:
 Without specifying the ```conjunction``` argument, the model applies one ```key``` and multiple ```values``` for each cross-attention layer.
 For concept conjunction prompts, you can run:
 ```
-python scripts/txt2img_demo.py --prompt "A red car and a white sheep" --plms --parser_type constituency --conjunction
+python scripts/txt2img_eval.py --prompt "A red car and a white sheep" --plms --parser_type constituency --conjunction
 ```
 
 Overall, compositional prompts remains a challenge for Stable Diffusion v1.4. It may still take several attempts to get a correct image with our method. 

@@ -209,8 +209,8 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
         attention_for_text = torch.nn.functional.softmax(attention_for_text, dim=-1)
 
         # Shift indices since we removed the first token
-        indices_to_alter = [index - 1 for index in indices_to_alter]
-
+        indices_to_alter = [i - 1 for i in indices_to_alter]
+            
         # Extract the maximum values
         max_indices_list = []
         for i in indices_to_alter:
@@ -242,8 +242,8 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
             from_where=("up", "down", "mid"),
             is_cross=True,
             select=0)
+
         # @Wenxuan: (n_patches, n_patches, seq_length), e.g. (16, 16, 77)
-        
         max_attention_per_index = self._compute_max_attention_per_index(
             attention_maps=attention_maps,
             indices_to_alter=indices_to_alter,
@@ -267,19 +267,20 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
 
     # EDIT: custom loss 
     @staticmethod
-    def _compute_loss_mine(max_attention_per_index: List[torch.Tensor], groups: List[List[int]], indices_to_alter: List[int], 
+    def _compute_loss_mine(attention_per_index: List[torch.Tensor], groups: List[List[int]], indices_to_alter: List[int], 
                            return_losses: bool = False, loss_type="cos", ae_ratio=0.7
                            ) -> torch.Tensor:
-        alter_mapping = {idx:i for i,idx in enumerate(indices_to_alter)} # maps each value of an index to alter to it's positional index in the list
-        group_mapping = {idx:curr_group[-1] for curr_group in groups for i,idx in enumerate(curr_group) if i<len(curr_group)-1} # maps each word idx to its anchor's idx. Anchors don't get an entry
-        group_anchors = set(group_mapping.values())
-    
-        # print(max_attention_per_index[0].size())
-        
+        # maps each token index to it's index in the list
+        alter_mapping = {idx: pos_idx for pos_idx, idx in enumerate(indices_to_alter)} 
+        idx2att = lambda i: attention_per_index[alter_mapping[i]]
+        # maps each word idx to its anchor's idx. NOTE: Anchors don't get an entry
+        idx2anchor = {idx: curr_group[-1] for curr_group in groups for i, idx in enumerate(curr_group) if i != len(curr_group) - 1} 
+        anchors = set(idx2anchor.values())
+            
         if loss_type == 'l1':
             loss_func = F.l1_loss
         elif loss_type == 'cos':
-            loss_func = lambda x,y: 1-F.cosine_similarity(x,y, dim=0)
+            loss_func = lambda x, y: 1-F.cosine_similarity(x, y, dim=0)
         elif loss_type == "wasserstein":
             # Wasserstein distance for multivariate gaussian distributions
             loss_func = losses.Wasserstein_loss
@@ -289,19 +290,23 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
         else:
             print("No option for loss type ", loss_type)
             return None
-        idx_convert = lambda i: max_attention_per_index[alter_mapping[i]]
+        
+        
         all_losses = []
+        MAX_CORRELATION = 0.9
+        MAX_ATT = 1
         for idx in indices_to_alter:
-            if idx in group_mapping:
-                loss = loss_func(idx_convert(idx), idx_convert(group_mapping[idx]).detach())
+                
+            if idx in idx2anchor:
+                # Attribute binding: encourage correlation between a noun (anchor) and its modifier
+                loss = max(0, MAX_CORRELATION - loss_func(idx2att(idx).detach(), idx2att(idx2anchor[idx])))
             else:
-                loss = ae_ratio * max(0, 1.-torch.max(idx_convert(idx))) + (1 - ae_ratio) * sum( [max(0, 1-loss_func(idx_convert(idx), idx_convert(other_anchor)) ) for other_anchor in group_anchors-{idx}] )/(len(group_anchors)-1)
+                loss = ae_ratio * max(0, MAX_ATT - torch.max(idx2att(idx))) # A&E
+                loss += (1 - ae_ratio) * sum([loss_func(idx2att(idx), idx2att(other_anchor))  # our loss
+                        for other_anchor in anchors - {idx}] ) / (len(anchors) - 1)
             all_losses.append(loss)
-        # all_losses = [loss_func(curr_att , idx_convert(group_mapping[idx]).detach())  # loss between current att map maxes and att map maxes of its anchor
-        #             if idx in group_mapping 
-        #             # original AE loss for anchor words + overlap loss 
-        #             else 0.7*max(0, 1.-torch.max(curr_att)) + 0.3*sum( [max(0, 1-loss_func(curr_att, idx_convert(other_anchor)) ) for other_anchor in group_anchors-{idx}] )/(len(group_anchors)-1) # original AE loss for anchor words plus overlap with other anchors
-        #             for idx, curr_att in zip(indices_to_alter, max_attention_per_index)] 
+            
+
 
         loss = sum(all_losses) / len(all_losses)
         if return_losses:
@@ -365,7 +370,7 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
             if groups is None: # original A&E loss
                 loss, losses = self._compute_loss(max_attention_per_index=max_attention_per_index, return_losses=True)
             else: # new A&E loss
-                loss, losses = self._compute_loss_mine(max_attention_per_index=max_attention_per_index,
+                loss, losses = self._compute_loss_mine(attention_per_index=max_attention_per_index,
                                                        groups=groups,
                                                        indices_to_alter=indices_to_alter,
                                                        return_losses=True,
@@ -415,7 +420,7 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
         if groups is None: # original A&E loss
             loss, losses = self._compute_loss(max_attention_per_index=max_attention_per_index, return_losses=True)
         else: # new A&E loss
-            loss, losses = self._compute_loss_mine(max_attention_per_index=max_attention_per_index,
+            loss, losses = self._compute_loss_mine(attention_per_index=max_attention_per_index,
                                                    groups=groups,
                                                    indices_to_alter=indices_to_alter,
                                                    return_losses=True,
@@ -621,7 +626,7 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                         if groups is None: # original A&E loss
                             loss = self._compute_loss(max_attention_per_index=max_attention_per_index)
                         else: # new A&E loss
-                            loss = self._compute_loss_mine(max_attention_per_index=max_attention_per_index,
+                            loss = self._compute_loss_mine(attention_per_index=max_attention_per_index,
                                                            groups=groups,
                                                            indices_to_alter=indices_to_alter,
                                                            return_losses=False,
@@ -658,7 +663,7 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
                             if groups is None: # original A&E loss
                                 loss = self._compute_loss(max_attention_per_index=max_attention_per_index)
                             else: # new A&E loss
-                                loss = self._compute_loss_mine(max_attention_per_index=max_attention_per_index,
+                                loss = self._compute_loss_mine(attention_per_index=max_attention_per_index,
                                                                groups=groups,
                                                                indices_to_alter=indices_to_alter,
                                                                return_losses=False,

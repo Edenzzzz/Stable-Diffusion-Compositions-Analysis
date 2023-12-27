@@ -229,12 +229,14 @@ def make_dir(outpath, folder_name, overwrite=True):
     return sample_path, base_count, grid_count
 
 
-def get_word_inds(text: str, word_place: int or str or list, tokenizer):
+def get_word_inds(tokenizer, text: str, word_place: int or str or list, skip_start=True):
     """
-    Get the indices of the words in the embedding
+    Get the indices of the words in the embedding. This handles two common bugs:
+    1. The user ignores that punctuations count as tokens. (in ", apple", apple is the 2nd token)
+    2. Rare/unknown words will be split. ("catdog" -> "cat", "##dog")
     Args:
         text: input prompt
-        word_place: Supports index of the word, the word itself, or a list of word indices.
+        word_place: index of the word starting from 0, the word itself, or a list of word indices.
         tokenizer: tokenizer
     """
     if "apple" in text:
@@ -242,33 +244,24 @@ def get_word_inds(text: str, word_place: int or str or list, tokenizer):
     else:
         pause = False
     
-    #NOTE: A bug in the original code!!!!
-    # split punctuations in each word since tokenizer separates punc from nouns
-    import re
-    punc_split_text = re.split("([.,!?\"':;)(])", text.strip())
-    #remove last punctuation split
-    if punc_split_text[-1] == "":
-        punc_split_text = punc_split_text[:-1]
-
-    split_text = []
-    for item in punc_split_text:
-        split_text += item.strip().split(" ")
-
-        
+    offset = 1 if skip_start else 0
+    
+    words_encode = [tokenizer.decode([item]).strip("#") for item in tokenizer.encode(text)][1:-1]
     if type(word_place) is str:
-        word_place = [i for i, word in enumerate(split_text) if word_place == word]
+        word_place = [i for i, word in enumerate(words_encode) if word_place == word]
     elif type(word_place) is int:
         word_place = [word_place]
+        
     out = []
     if len(word_place) > 0:
-        words_encode = [tokenizer.decode([item]).strip("#") for item in tokenizer.encode(text)][1:-1]
         cur_len, ptr = 0, 0
- 
+        print(words_encode)
+        
         for i in range(len(words_encode)):
             cur_len += len(words_encode[i])
             if ptr in word_place:
-                out.append(i + 1) # record all token positions of a word
-            if cur_len >= len(split_text[ptr]): # move to next word
+                out.append(i + offset) # record all token positions of a word
+            if cur_len >= len(words_encode[ptr]): # move to next word
                 ptr += 1
                 cur_len = 0
 
