@@ -293,12 +293,16 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
         
         
         all_losses = []
-        MAX_CORRELATION = 0.9
+        MAX_CORRELATION = 1
         MAX_ATT = 1
+        # if loss_type == 'wasserstein':
+        #     # treat token in the same phrase as the same distribution
+        # else:
         for idx in indices_to_alter:
                 
             if idx in idx2anchor:
                 # Attribute binding: encourage correlation between a noun (anchor) and its modifier
+                breakpoint()
                 loss = max(0, MAX_CORRELATION - loss_func(idx2att(idx).detach(), idx2att(idx2anchor[idx])))
             else:
                 loss = ae_ratio * max(0, MAX_ATT - torch.max(idx2att(idx))) # A&E
