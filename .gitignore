@@ -3,3 +3,5 @@ outputs
 src
 test.ipynb
 **/*.ckpt
+*.pyc
+*.pyo

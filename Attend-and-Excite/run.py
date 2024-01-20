@@ -148,8 +148,12 @@ def run_on_prompt(prompt: List[str],
                   seed: torch.Generator,
                   config: RunConfig,
                   groups: List[List[int]] = None, # EDIT
-                  ae_ratio: float = 0.7
+                  ae_ratio: float = 0.7,
+                  **kwargs
                 ) -> Image.Image:
+    height = kwargs.pop('height', 512)
+    width = kwargs.pop('width', 512)
+    
     if groups is not None:
         # Replace A&E's loss function with ours
         assert config.loss_type in ["l1", "cos", "wasserstein", "dc"], "Invalid loss type"
@@ -186,7 +190,9 @@ def run_on_prompt(prompt: List[str],
                     kernel_size=config.kernel_size,
                     sd_2_1=config.sd_2_1,
                     loss_type=config.loss_type,
-                    ae_ratio=ae_ratio)
+                    ae_ratio=ae_ratio,
+                    height=height,
+                    width=width)
     image = outputs.images[0]
     return image
 
