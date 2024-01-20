@@ -5,3 +5,5 @@ test.ipynb
 **/*.ckpt
 *.pyc
 *.pyo
+**/__pycache__
+```

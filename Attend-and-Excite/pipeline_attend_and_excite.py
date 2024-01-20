@@ -18,7 +18,7 @@ from diffusers.pipelines.stable_diffusion import StableDiffusionPipelineOutput
 from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
 
 from diffusers.pipelines.stable_diffusion import StableDiffusionPipeline
-
+import itertools
 from utils.gaussian_smoothing import GaussianSmoothing
 from utils.ptp_utils import AttentionStore, aggregate_attention
 
@@ -276,11 +276,11 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
         # maps each word idx to its anchor's idx. NOTE: Anchors don't get an entry
         idx2anchor = {idx: curr_group[-1] for curr_group in groups for i, idx in enumerate(curr_group) if i != len(curr_group) - 1} 
         anchors = set(idx2anchor.values())
-            
+        
         if loss_type == 'l1':
             loss_func = F.l1_loss
         elif loss_type == 'cos':
-            loss_func = lambda x, y: 1-F.cosine_similarity(x, y, dim=0)
+            loss_func = lambda x, y: 1 - F.cosine_similarity(x, y, dim=0)
         elif loss_type == "wasserstein":
             # Wasserstein distance for multivariate gaussian distributions
             loss_func = losses.Wasserstein_loss
@@ -295,21 +295,25 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
         all_losses = []
         MAX_CORRELATION = 1
         MAX_ATT = 1
-        # if loss_type == 'wasserstein':
-        #     # treat token in the same phrase as the same distribution
-        # else:
-        for idx in indices_to_alter:
-                
-            if idx in idx2anchor:
-                # Attribute binding: encourage correlation between a noun (anchor) and its modifier
-                loss = max(0, MAX_CORRELATION - loss_func(idx2att(idx).detach(), idx2att(idx2anchor[idx])))
-            else:
-                loss = ae_ratio * max(0, MAX_ATT - torch.max(idx2att(idx))) # A&E
-                loss += (1 - ae_ratio) * sum([loss_func(idx2att(idx), idx2att(other_anchor))  # our loss
-                        for other_anchor in anchors - {idx}] ) / (len(anchors) - 1)
-            all_losses.append(loss)
-            
-
+        if loss_type == 'wasserstein':
+            # Group-wise loss (avoid 0 cov matrix)
+            # Treat token in the same phrase as the same distribution
+            att_groups = [torch.stack([idx2att(idx) for idx in curr_group]) for curr_group in groups]
+            group_combs = itertools.combinations(att_groups, 2)
+            for group1, group2 in group_combs:
+                loss = max(0, MAX_CORRELATION - loss_func(group1, group2))
+                all_losses.append(loss)
+        else:
+            # Token-wise loss
+            for idx in indices_to_alter:
+                if idx in idx2anchor:
+                    # Attribute binding: encourage correlation between a noun (anchor) and its modifier
+                    loss = max(0, MAX_CORRELATION - loss_func(idx2att(idx).detach(), idx2att(idx2anchor[idx])))
+                else:
+                    loss = ae_ratio * max(0, MAX_ATT - torch.max(idx2att(idx))) # A&E
+                    loss += (1 - ae_ratio) * sum([loss_func(idx2att(idx), idx2att(other_anchor).detach())  # our loss
+                            for other_anchor in anchors - {idx}] ) / (len(anchors) - 1) if len(anchors) > 1 else 0
+                all_losses.append(loss)
 
         loss = sum(all_losses) / len(all_losses)
         if return_losses:
@@ -320,8 +324,11 @@ class AttendAndExcitePipeline(StableDiffusionPipeline):
     @staticmethod
     def _update_latent(latents: torch.Tensor, loss: torch.Tensor, step_size: float) -> torch.Tensor:
         """ Update the latent according to the computed loss. """
-        grad_cond = torch.autograd.grad(loss.requires_grad_(True), [latents], retain_graph=True)[0]
-        latents = latents - step_size * grad_cond
+        grad_cond = torch.autograd.grad(loss.requires_grad_(True), [latents], retain_graph=True, allow_unused=True)[0]
+        try:
+            latents = latents - step_size * grad_cond
+        except:
+            print("loss is 0 due to nan")
         return latents
 
     def _perform_iterative_refinement_step(self,

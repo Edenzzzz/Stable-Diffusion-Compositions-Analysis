@@ -37,9 +37,7 @@ def load_model(config: RunConfig):
 '''
 
 def traverse_tree(tree, arg_dict):
-    
-    breakpoint()
-    
+        
     if type(tree) != nltk.tree.tree.Tree:
         return 
     elif tree.label() == "NP":
